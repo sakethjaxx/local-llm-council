@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Council</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0A0A0C;
+      --surface: #111116;
+      --surface2: #18181f;
+      --border: rgba(255,255,255,0.07);
+      --border-bright: rgba(255,255,255,0.15);
+      --text: #E8E8EE;
+      --muted: #6B6B7A;
+      --claude: #E8845A;
+      --gpt: #74B3CE;
+      --gemini: #7EC8A4;
+      --chairman: #F5C842;
+      --danger: #E05C5C;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── BACKGROUND GRID ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── HEADER ── */
+    header {
+      position: relative;
+      z-index: 10;
+      padding: 32px 48px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .logo-mark {
+      width: 42px;
+      height: 42px;
+      border: 1px solid var(--border-bright);
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+    }
+
+    .title-group h1 {
+      font-family: 'Syne', sans-serif;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--text);
+    }
+
+    .title-group p {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+
+    .status-badge {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--gemini);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── MAIN LAYOUT ── */
+    main {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      min-height: calc(100vh - 89px);
+    }
+
+    /* ── LEFT PANEL: INPUT ── */
+    .input-panel {
+      border-right: 1px solid var(--border);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .panel-label {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    textarea {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.7;
+      padding: 14px 16px;
+      resize: vertical;
+      min-height: 160px;
+      transition: border-color 0.2s;
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: var(--border-bright);
+    }
+
+    textarea::placeholder { color: var(--muted); }
+
+    .drop-zone {
+      border: 1px dashed var(--border-bright);
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--claude);
+      background: rgba(232,132,90,0.04);
+    }
+
+    .drop-zone input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .drop-zone .dz-icon { font-size: 24px; margin-bottom: 8px; }
+    .drop-zone .dz-text { font-size: 12px; color: var(--muted); }
+    .drop-zone .dz-filename { font-size: 11px; color: var(--gemini); margin-top: 6px; }
+
+    img#preview {
+      width: 100%;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      margin-top: 8px;
+      display: none;
+    }
+
+    /* ── MEMBER ROSTER ── */
+    .roster {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .roster-header {
+      padding: 10px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .member-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .member-row:last-child { border-bottom: none; }
+
+    .member-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .member-name { font-size: 12px; flex: 1; }
+
+    .member-role {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+
+    /* ── LAUNCH BUTTON ── */
+    .launch-btn {
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      padding: 14px 24px;
+      font-family: 'Syne', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .launch-btn:hover:not(:disabled) {
+      background: #fff;
+      transform: translateY(-1px);
+    }
+
+    .launch-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── RIGHT PANEL: COUNCIL OUTPUT ── */
+    .council-panel {
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      overflow-y: auto;
+    }
+
+    .idle-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 16px;
+      color: var(--muted);
+    }
+
+    .idle-state .idle-icon {
+      font-size: 48px;
+      opacity: 0.3;
+    }
+
+    .idle-state p {
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* ── PHASE BANNER ── */
+    .phase-banner {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 18px;
+      border-radius: 8px;
+      border-left: 3px solid var(--chairman);
+      background: rgba(245,200,66,0.05);
+      animation: slidein 0.3s ease;
+    }
+
+    .phase-banner .ph-num {
+      font-family: 'Syne', sans-serif;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      color: var(--chairman);
+    }
+
+    .phase-banner .ph-label {
+      font-size: 13px;
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-weight: 600;
+    }
+
+    /* ── COUNCIL CARDS ── */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .council-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      animation: slidein 0.35s ease;
+      transition: border-color 0.2s;
+    }
+
+    .council-card:hover { border-color: var(--border-bright); }
+
+    .card-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-icon {
+      font-size: 16px;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+    }
+
+    .card-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .card-tag {
+      margin-left: auto;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: var(--surface2);
+      padding: 3px 8px;
+      border-radius: 20px;
+    }
+
+    .card-body {
+      padding: 14px 16px;
+      font-size: 12px;
+      line-height: 1.75;
+      color: #C8C8D4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .thinking-pulse {
+      display: flex;
+      gap: 5px;
+      padding: 16px;
+      align-items: center;
+    }
+
+    .thinking-pulse span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      animation: bounce 1.2s infinite;
+    }
+
+    .thinking-pulse span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-pulse span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); opacity: 0.4; }
+      50% { transform: translateY(-5px); opacity: 1; }
+    }
+
+    /* ── CHAIRMAN CARD ── */
+    .chairman-card {
+      background: linear-gradient(135deg, rgba(245,200,66,0.08) 0%, var(--surface) 60%);
+      border: 1px solid rgba(245,200,66,0.25);
+      border-radius: 12px;
+      overflow: hidden;
+      animation: slidein 0.4s ease;
+    }
+
+    .chairman-card .card-header {
+      background: rgba(245,200,66,0.05);
+      border-bottom: 1px solid rgba(245,200,66,0.15);
+    }
+
+    .chairman-card .card-body {
+      font-size: 13px;
+      line-height: 1.8;
+      padding: 20px;
+    }
+
+    /* ── DONE STATE ── */
+    .done-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 18px;
+      border-radius: 8px;
+      background: rgba(126,200,164,0.08);
+      border: 1px solid rgba(126,200,164,0.2);
+      font-size: 12px;
+      color: var(--gemini);
+      letter-spacing: 0.05em;
+      animation: slidein 0.3s ease;
+    }
+
+    /* ── PHASE DIVIDER ── */
+    .phase-section { display: flex; flex-direction: column; gap: 14px; }
+
+    @keyframes slidein {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 1100px) {
+      main { grid-template-columns: 320px 1fr; }
+      .cards-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 780px) {
+      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .input-panel { border-right: none; border-bottom: 1px solid var(--border); }
+      header { padding: 20px 24px; }
+      .input-panel, .council-panel { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo-mark">⚖</div>
+  <div class="title-group">
+    <h1>LLM Council</h1>
+    <p>Multi-Model Sprint Decision Engine</p>
+  </div>
+  <div class="status-badge">
+    <div class="status-dot"></div>
+    LOCAL · v1.0
+  </div>
+</header>
+
+<main>
+
+  <!-- ── LEFT PANEL ── -->
+  <aside class="input-panel">
+
+    <div class="input-group">
+      <div class="panel-label">Sprint Overview — Text / JSON</div>
+      <textarea id="sprintText" placeholder="Paste your sprint plan, ticket list, or JSON summary here...&#10;&#10;e.g. Sprint 12 — Implement RAG pipeline&#10;- Ticket #42: Embed documents via OpenAI&#10;- Ticket #43: Integrate Weaviate&#10;- Ticket #44: API endpoint /search"></textarea>
+    </div>
+
+    <div class="input-group">
+      <div class="panel-label">Sprint Graph / Screenshot (optional)</div>
+      <div class="drop-zone" id="dropZone">
+        <input type="file" id="imageInput" accept="image/*">
+        <div class="dz-icon">📊</div>
+        <div class="dz-text">Drop sprint graph or click to upload</div>
+        <div class="dz-filename" id="fileName"></div>
+      </div>
+      <img id="preview" alt="Sprint graph preview">
+    </div>
+
+    <div class="roster">
+      <div class="roster-header">Council Members</div>
+      <div class="member-row">
+        <div class="member-dot" style="background:#E8845A"></div>
+        <div class="member-name">Claude Sonnet</div>
+        <div class="member-role">Analysis</div>
+      </div>
+      <div class="member-row">
+        <div class="member-dot" style="background:#74B3CE"></div>
+        <div class="member-name">GPT-4o</div>
+        <div class="member-role">Analysis</div>
+      </div>
+      <div class="member-row">
+        <div class="member-dot" style="background:#7EC8A4"></div>
+        <div class="member-name">Gemini Flash</div>
+        <div class="member-role">Analysis</div>
+      </div>
+      <div class="member-row">
+        <div class="member-dot" style="background:#F5C842"></div>
+        <div class="member-name">GPT-4o-mini</div>
+        <div class="member-role">Chairman</div>
+      </div>
+    </div>
+
+    <button class="launch-btn" id="launchBtn" onclick="launchCouncil()">
+      <span>⚖</span> Convene Council
+    </button>
+
+  </aside>
+
+  <!-- ── RIGHT PANEL ── -->
+  <section class="council-panel" id="councilPanel">
+    <div class="idle-state" id="idleState">
+      <div class="idle-icon">⚖</div>
+      <p>Awaiting sprint input</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // ── Drag & Drop / Preview ──────────────────────────────────────────
+
+  const dropZone  = document.getElementById('dropZone');
+  const imageInput = document.getElementById('imageInput');
+  const preview   = document.getElementById('preview');
+  const fileName  = document.getElementById('fileName');
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+
+  imageInput.addEventListener('change', () => {
+    if (imageInput.files[0]) handleFile(imageInput.files[0]);
+  });
+
+  function handleFile(file) {
+    fileName.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => {
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ── Council Launch ─────────────────────────────────────────────────
+
+  const MEMBER_META = {
+    claude:   { label: 'Claude Sonnet',       color: '#E8845A', icon: '⚡' },
+    gpt4o:    { label: 'GPT-4o',              color: '#74B3CE', icon: '🔮' },
+    gemini:   { label: 'Gemini Flash',        color: '#7EC8A4', icon: '✦' },
+    chairman: { label: 'Chairman · GPT-4o-mini', color: '#F5C842', icon: '👑' },
+  };
+
+  // Track cards per phase
+  let phase1Cards = {};
+  let phase2Cards = {};
+  let thinkingCards = {};
+
+  async function launchCouncil() {
+    const text  = document.getElementById('sprintText').value.trim();
+    const file  = imageInput.files[0];
+
+    if (!text && !file) {
+      alert('Please provide sprint text or upload an image.');
+      return;
+    }
+
+    const btn   = document.getElementById('launchBtn');
+    const panel = document.getElementById('councilPanel');
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> Council in session...';
+
+    // Clear panel
+    panel.innerHTML = '';
+    phase1Cards = {};
+    phase2Cards = {};
+    thinkingCards = {};
+
+    const formData = new FormData();
+    formData.append('sprint_text', text);
+    if (file) formData.append('image', file);
+
+    try {
+      const resp = await fetch('/council/stream', { method: 'POST', body: formData });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              handleEvent(event, panel);
+            } catch {}
+          }
+        }
+      }
+    } catch (err) {
+      panel.innerHTML += `<div class="done-bar" style="border-color:rgba(224,92,92,0.4);color:#E05C5C;">✗ Error: ${err.message}</div>`;
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<span>⚖</span> Convene Council';
+  }
+
+  // ── Section containers ─────────────────────────────────────────────
+  let ph1Section = null;
+  let ph2Section = null;
+  let ph3Section = null;
+
+  function handleEvent(ev, panel) {
+    if (ev.type === 'phase_start') {
+      const section = document.createElement('div');
+      section.className = 'phase-section';
+
+      const banner = document.createElement('div');
+      banner.className = 'phase-banner';
+      banner.innerHTML = `<span class="ph-num">PHASE ${ev.phase}</span><span class="ph-label">${ev.label}</span>`;
+      section.appendChild(banner);
+
+      if (ev.phase === 1) {
+        const grid = document.createElement('div');
+        grid.className = 'cards-grid';
+        grid.id = 'grid-phase1';
+        section.appendChild(grid);
+        ph1Section = section;
+      } else if (ev.phase === 2) {
+        const grid = document.createElement('div');
+        grid.className = 'cards-grid';
+        grid.id = 'grid-phase2';
+        section.appendChild(grid);
+        ph2Section = section;
+      } else if (ev.phase === 3) {
+        ph3Section = section;
+      }
+
+      panel.appendChild(section);
+      section.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+
+    if (ev.type === 'member_thinking') {
+      const phase = ev.phase || 1;
+      const gridId = phase === 3 ? null : `grid-phase${phase}`;
+      const target = phase === 3 ? ph3Section : document.getElementById(gridId);
+      if (!target) return;
+
+      const meta = MEMBER_META[ev.member] || {};
+      const card = buildCard(ev.member, meta, null, phase === 1 ? 'analysis' : (phase === 2 ? 'review' : 'decision'));
+      target.appendChild(card);
+      thinkingCards[`${ev.member}-${phase}`] = card;
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return;
+    }
+
+    if (ev.type === 'member_analysis') {
+      const key = `${ev.member}-1`;
+      const existing = thinkingCards[key];
+      if (existing) {
+        existing.querySelector('.card-body').textContent = ev.content;
+        existing.querySelector('.thinking-pulse')?.remove();
+      } else {
+        const grid = document.getElementById('grid-phase1');
+        if (grid) {
+          const card = buildCard(ev.member, ev, ev.content, 'analysis');
+          grid.appendChild(card);
+        }
+      }
+      return;
+    }
+
+    if (ev.type === 'member_review') {
+      const key = `${ev.member}-2`;
+      const existing = thinkingCards[key];
+      if (existing) {
+        existing.querySelector('.card-body').textContent = ev.content;
+        existing.querySelector('.thinking-pulse')?.remove();
+      } else {
+        const grid = document.getElementById('grid-phase2');
+        if (grid) {
+          const card = buildCard(ev.member, ev, ev.content, 'review');
+          grid.appendChild(card);
+        }
+      }
+      return;
+    }
+
+    if (ev.type === 'chairman_decision') {
+      const key = `${ev.member}-3`;
+      const existing = thinkingCards[key];
+      if (existing) {
+        existing.querySelector('.card-body').textContent = ev.content;
+        existing.querySelector('.thinking-pulse')?.remove();
+      } else {
+        const card = buildChairmanCard(ev);
+        ph3Section.appendChild(card);
+      }
+      return;
+    }
+
+    if (ev.type === 'done') {
+      const bar = document.createElement('div');
+      bar.className = 'done-bar';
+      bar.textContent = '✓ Council session complete — verdict delivered';
+      panel.appendChild(bar);
+      bar.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+
+    if (ev.type === 'error') {
+      const bar = document.createElement('div');
+      bar.className = 'done-bar';
+      bar.style.cssText = 'border-color:rgba(224,92,92,0.4);color:#E05C5C;';
+      bar.textContent = `✗ ${ev.message}`;
+      panel.appendChild(bar);
+      return;
+    }
+  }
+
+  function buildCard(member, meta, content, tag) {
+    const isChairman = member === 'chairman';
+    const card = document.createElement('div');
+    card.className = isChairman ? 'chairman-card' : 'council-card';
+
+    const color = meta.color || '#888';
+    const icon  = meta.icon  || '●';
+    const label = meta.label || member;
+
+    card.innerHTML = `
+      <div class="card-header">
+        <div class="card-icon" style="background:${color}18;">${icon}</div>
+        <div class="card-name" style="color:${color}">${label}</div>
+        <div class="card-tag">${tag}</div>
+      </div>
+    `;
+
+    if (content) {
+      const body = document.createElement('div');
+      body.className = 'card-body';
+      body.textContent = content;
+      card.appendChild(body);
+    } else {
+      const pulse = document.createElement('div');
+      pulse.className = 'thinking-pulse';
+      pulse.innerHTML = '<span></span><span></span><span></span>';
+      card.appendChild(pulse);
+
+      const body = document.createElement('div');
+      body.className = 'card-body';
+      body.style.display = 'none';
+      card.appendChild(body);
+    }
+
+    return card;
+  }
+
+  function buildChairmanCard(ev) {
+    const card = buildCard('chairman', ev, ev.content, 'verdict');
+    card.className = 'chairman-card';
+    return card;
+  }
+</script>
+</body>
+</html>
