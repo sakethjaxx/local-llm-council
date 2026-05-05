@@ -9,6 +9,11 @@ Phase 3 │ Chairman Decision     — Synthesizes everything → final call
 import asyncio
 from typing import AsyncIterator, Optional
 import litellm
+from memory_graph import memory_engine
+from io_parser import parse_input
+from search_engine import get_search_context
+from smart_phase import check_unanimous_consensus
+from mcp_client import query_mcp_server
 
 # Make litellm not spam the console
 litellm.suppress_debug_info = True
@@ -164,7 +169,13 @@ class CouncilOrchestrator:
         await self._stream_llm_to_queue(member_id, 2, messages, queue, 400)
 
     async def _chairman_decide(self, chairman_cfg: dict, members_config: dict, analyses: dict[str, str], reviews: dict[str, str], queue: asyncio.Queue):
+        # 1. Chairman Web Search (Optional)
+        search_results = await get_search_context(reviews, chairman_cfg["model"])
+
         council_brief = ""
+        if search_results:
+            council_brief += search_results + "\n\n"
+            
         for member, analysis in analyses.items():
             cfg = members_config.get(member, {})
             council_brief += f"=== {cfg.get('label', member)} ANALYSIS ===\n{analysis}\n\n"
@@ -182,6 +193,18 @@ class CouncilOrchestrator:
     async def run(self, topic_text: str, image_b64: Optional[str], image_mime: Optional[str], custom_config: Optional[dict] = None) -> AsyncIterator[dict]:
         config = custom_config if custom_config else DEFAULT_MEMBER_CONFIG
         council_members = [k for k in config.keys() if k != "chairman"]
+        chairman_cfg = config.get("chairman", DEFAULT_MEMBER_CONFIG["chairman"])
+
+        # Zero-Cost Scraper I/O
+        scraped_topic = await parse_input(topic_text)
+
+        # Retrieve past context from Graph Memory
+        past_context = await memory_engine.get_context(scraped_topic, chairman_cfg["model"])
+        
+        # Pull MCP Context if needed
+        mcp_context = await query_mcp_server(scraped_topic)
+
+        full_topic = mcp_context + past_context + scraped_topic
 
         # ── Phase 1 ──────────────────────────────────────────────────
         yield {"type": "phase_start", "phase": 1, "label": "Independent Analysis"}
@@ -189,7 +212,7 @@ class CouncilOrchestrator:
             yield {"type": "member_thinking", "member": member, "meta": config[member]}
 
         queue = asyncio.Queue()
-        tasks = [asyncio.create_task(self._member_analyze(member, config[member], topic_text, image_b64, image_mime, queue)) for member in council_members]
+        tasks = [asyncio.create_task(self._member_analyze(member, config[member], full_topic, image_b64, image_mime, queue)) for member in council_members]
         
         analyses = {}
         completed = 0
@@ -201,23 +224,33 @@ class CouncilOrchestrator:
             else:
                 yield event
 
-        # ── Phase 2 ──────────────────────────────────────────────────
-        yield {"type": "phase_start", "phase": 2, "label": "Cross-Review"}
-        for member in council_members:
-            yield {"type": "member_thinking", "member": member, "phase": 2, "meta": config[member]}
-
-        queue = asyncio.Queue()
-        tasks = [asyncio.create_task(self._member_review(member, config[member], config, analyses, queue)) for member in council_members]
-        
+        # Smart Phase 2 (Similarity Check)
+        is_unanimous = await check_unanimous_consensus(analyses)
         reviews = {}
-        completed = 0
-        while completed < len(council_members):
-            event = await queue.get()
-            if event["type"] == "member_done":
-                completed += 1
-                reviews[event["member"]] = event["full_text"]
-            else:
-                yield event
+
+        if is_unanimous:
+            yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (SKIPPED - Unanimous Consensus!)"}
+            for member in council_members:
+                reviews[member] = "SKIPPED - The council was in unanimous agreement during Phase 1. No factual disputes detected."
+                yield {"type": "member_done", "member": member, "full_text": reviews[member]}
+            await asyncio.sleep(1) # Brief pause for UI fluidity
+        else:
+            # ── Phase 2 ──────────────────────────────────────────────────
+            yield {"type": "phase_start", "phase": 2, "label": "Cross-Review"}
+            for member in council_members:
+                yield {"type": "member_thinking", "member": member, "phase": 2, "meta": config[member]}
+
+            queue = asyncio.Queue()
+            tasks = [asyncio.create_task(self._member_review(member, config[member], config, analyses, queue)) for member in council_members]
+            
+            completed = 0
+            while completed < len(council_members):
+                event = await queue.get()
+                if event["type"] == "member_done":
+                    completed += 1
+                    reviews[event["member"]] = event["full_text"]
+                else:
+                    yield event
 
         # ── Phase 3 ──────────────────────────────────────────────────
         chairman_cfg = config.get("chairman", DEFAULT_MEMBER_CONFIG["chairman"])
@@ -228,12 +261,17 @@ class CouncilOrchestrator:
         asyncio.create_task(self._chairman_decide(chairman_cfg, config, analyses, reviews, queue))
         
         completed = 0
+        chairman_decision_text = ""
         while completed < 1:
             event = await queue.get()
             if event["type"] == "member_done":
                 completed += 1
+                chairman_decision_text = event["full_text"]
             else:
                 yield event
+
+        # Trigger background memory extraction
+        asyncio.create_task(memory_engine.extract_memory(topic_text, chairman_decision_text, chairman_cfg["model"]))
 
         yield {"type": "done"}
 

@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&family=Fira+Code:wght@300;400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <style>
     :root {
       --bg: #030305;
@@ -118,6 +119,10 @@
       color: var(--pink);
       letter-spacing: 0.1em;
       margin-top: 2px;
+    }
+
+    .header-actions {
+      margin-left: auto;
     }
 
     /* ── MAIN LAYOUT ── */
@@ -374,6 +379,24 @@
     .typing span:nth-child(3) { animation-delay: 0.4s; }
     @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
 
+    /* ── MEMORY MODAL ── */
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px);
+      z-index: 1000; display: none; align-items: center; justify-content: center;
+    }
+    .modal-content {
+      background: var(--surface); border: 1px solid var(--cyan);
+      border-radius: 8px; width: 80vw; height: 80vh;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .modal-header {
+      padding: 16px; border-bottom: 1px solid var(--cyan);
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: 'Orbitron', sans-serif; color: var(--cyan);
+    }
+    #memoryNetwork { flex: 1; background: #000; }
+
   </style>
 </head>
 
@@ -386,6 +409,9 @@
     <div class="title-group">
       <h1>UNIVERSAL COUNCIL ENGINE</h1>
       <p>MULTI-AGENT REASONING FRAMEWORK v2.0</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-small" onclick="viewMemory()">[ VIEW LONG-TERM MEMORY GRAPH ]</button>
     </div>
   </header>
 
@@ -421,6 +447,16 @@
       </div>
     </section>
   </main>
+
+  <div class="modal-overlay" id="memoryModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>> KNOWLEDGE GRAPH (LONG-TERM MEMORY)</span>
+        <button class="btn btn-small" onclick="closeMemory()">X</button>
+      </div>
+      <div id="memoryNetwork"></div>
+    </div>
+  </div>
 
   <script>
     // ── STATE ──
@@ -716,6 +752,44 @@
       a.href = url;
       a.download = `council_report_${Date.now()}.md`;
       a.click();
+    }
+
+    // ── MEMORY GRAPH VISUALIZATION ──
+    async function viewMemory() {
+      const modal = document.getElementById('memoryModal');
+      modal.style.display = 'flex';
+      
+      try {
+        const resp = await fetch('/council/memory');
+        const data = await resp.json();
+        
+        const container = document.getElementById('memoryNetwork');
+        const options = {
+          nodes: {
+            shape: 'dot', size: 16,
+            font: { color: '#E8E8EE', face: 'Rajdhani', size: 14 },
+            color: { background: '#00f0ff', border: '#ff00ff' },
+            shadow: true
+          },
+          edges: {
+            width: 2,
+            color: { color: 'rgba(0, 240, 255, 0.4)', highlight: '#ff00ff' },
+            font: { color: '#8A8A9E', face: 'Fira Code', size: 11, align: 'horizontal' },
+            arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+            smooth: { type: 'continuous' }
+          },
+          physics: { barnesHut: { gravitationalConstant: -3000, centralGravity: 0.3 } }
+        };
+        
+        new vis.Network(container, data, options);
+      } catch (e) {
+        console.error(e);
+        alert("Failed to load memory graph.");
+      }
+    }
+
+    function closeMemory() {
+      document.getElementById('memoryModal').style.display = 'none';
     }
   </script>
 </body>

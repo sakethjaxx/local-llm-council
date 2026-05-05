@@ -117,6 +117,12 @@ async def council_chat(req: ChatRequest):
     )
 
 
+from memory_graph import memory_engine
+
+@app.get("/council/memory")
+async def get_memory():
+    return memory_engine.get_graph_data()
+
 @app.get("/health")
 async def health():
     keys = {
