@@ -1,800 +1,722 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LLM Council</title>
+  <title>LLM Council - Universal Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&family=Fira+Code:wght@300;400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     :root {
-      --bg: #0A0A0C;
-      --surface: #111116;
-      --surface2: #18181f;
-      --border: rgba(255,255,255,0.07);
-      --border-bright: rgba(255,255,255,0.15);
+      --bg: #030305;
+      --surface: rgba(15, 15, 20, 0.7);
+      --surface-hover: rgba(25, 25, 35, 0.8);
+      --border: rgba(0, 240, 255, 0.15);
+      --border-bright: rgba(0, 240, 255, 0.5);
       --text: #E8E8EE;
-      --muted: #6B6B7A;
-      --claude: #E8845A;
-      --gpt: #74B3CE;
-      --gemini: #7EC8A4;
-      --chairman: #F5C842;
-      --danger: #E05C5C;
+      --muted: #8A8A9E;
+      --cyan: #00f0ff;
+      --pink: #ff00ff;
+      --chairman: #FFD700;
+      --danger: #ff3366;
+      --glass: blur(12px);
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'Rajdhani', sans-serif;
       min-height: 100vh;
       overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
     }
 
-    /* ── BACKGROUND GRID ── */
+    /* ── CYBERPUNK GRID & GLOW ── */
     body::before {
       content: '';
       position: fixed;
       inset: 0;
-      background-image:
-        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
-      background-size: 40px 40px;
+      background-image: 
+        linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
       pointer-events: none;
-      z-index: 0;
+      z-index: -1;
+    }
+
+    .ambient-glow {
+      position: fixed;
+      top: -10vw;
+      right: -10vw;
+      width: 40vw;
+      height: 40vw;
+      background: radial-gradient(circle, rgba(0, 240, 255, 0.1) 0%, transparent 70%);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: -1;
+      filter: blur(50px);
+    }
+    .ambient-glow-2 {
+      position: fixed;
+      bottom: -10vw;
+      left: -10vw;
+      width: 40vw;
+      height: 40vw;
+      background: radial-gradient(circle, rgba(255, 0, 255, 0.08) 0%, transparent 70%);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: -1;
+      filter: blur(50px);
     }
 
     /* ── HEADER ── */
     header {
-      position: relative;
-      z-index: 10;
-      padding: 32px 48px 24px;
+      padding: 20px 40px;
       border-bottom: 1px solid var(--border);
+      background: rgba(3, 3, 5, 0.8);
+      backdrop-filter: var(--glass);
       display: flex;
       align-items: center;
       gap: 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
 
     .logo-mark {
-      width: 42px;
-      height: 42px;
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 900;
+      font-size: 24px;
+      color: var(--cyan);
+      text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
       border: 1px solid var(--border-bright);
-      border-radius: 8px;
-      display: grid;
-      place-items: center;
-      font-size: 20px;
+      padding: 5px 12px;
+      border-radius: 4px;
+      background: rgba(0, 240, 255, 0.05);
     }
 
     .title-group h1 {
-      font-family: 'Syne', sans-serif;
-      font-size: 22px;
-      font-weight: 800;
-      letter-spacing: -0.5px;
-      color: var(--text);
+      font-family: 'Orbitron', sans-serif;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #fff;
     }
 
     .title-group p {
+      font-family: 'Fira Code', monospace;
       font-size: 11px;
-      color: var(--muted);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      color: var(--pink);
+      letter-spacing: 0.1em;
       margin-top: 2px;
-    }
-
-    .status-badge {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 11px;
-      color: var(--muted);
-      letter-spacing: 0.06em;
-    }
-
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--gemini);
-      animation: pulse 2s infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
     }
 
     /* ── MAIN LAYOUT ── */
     main {
-      position: relative;
-      z-index: 1;
       display: grid;
-      grid-template-columns: 380px 1fr;
-      min-height: calc(100vh - 89px);
+      grid-template-columns: 420px 1fr;
+      flex: 1;
     }
 
-    /* ── LEFT PANEL: INPUT ── */
-    .input-panel {
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+
+    /* ── LEFT PANEL: CONFIG ── */
+    .config-panel {
       border-right: 1px solid var(--border);
-      padding: 32px;
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-    }
-
-    .panel-label {
-      font-size: 10px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 4px;
-    }
-
-    .input-group {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    textarea {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 12.5px;
-      line-height: 1.7;
-      padding: 14px 16px;
-      resize: vertical;
-      min-height: 160px;
-      transition: border-color 0.2s;
-    }
-
-    textarea:focus {
-      outline: none;
-      border-color: var(--border-bright);
-    }
-
-    textarea::placeholder { color: var(--muted); }
-
-    .drop-zone {
-      border: 1px dashed var(--border-bright);
-      border-radius: 8px;
+      background: rgba(3, 3, 5, 0.6);
+      backdrop-filter: var(--glass);
       padding: 24px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.2s;
-      position: relative;
-    }
-
-    .drop-zone:hover, .drop-zone.dragover {
-      border-color: var(--claude);
-      background: rgba(232,132,90,0.04);
-    }
-
-    .drop-zone input {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      cursor: pointer;
-    }
-
-    .drop-zone .dz-icon { font-size: 24px; margin-bottom: 8px; }
-    .drop-zone .dz-text { font-size: 12px; color: var(--muted); }
-    .drop-zone .dz-filename { font-size: 11px; color: var(--gemini); margin-top: 6px; }
-
-    img#preview {
-      width: 100%;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      margin-top: 8px;
-      display: none;
-    }
-
-    /* ── MEMBER ROSTER ── */
-    .roster {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-    }
-
-    .roster-header {
-      padding: 10px 14px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      font-size: 10px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-
-    .member-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .member-row:last-child { border-bottom: none; }
-
-    .member-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    .member-name { font-size: 12px; flex: 1; }
-
-    .member-role {
-      font-size: 10px;
-      color: var(--muted);
-      letter-spacing: 0.05em;
-    }
-
-    /* ── LAUNCH BUTTON ── */
-    .launch-btn {
-      background: var(--text);
-      color: var(--bg);
-      border: none;
-      border-radius: 8px;
-      padding: 14px 24px;
-      font-family: 'Syne', sans-serif;
-      font-size: 14px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 0.02em;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-    }
-
-    .launch-btn:hover:not(:disabled) {
-      background: #fff;
-      transform: translateY(-1px);
-    }
-
-    .launch-btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    /* ── RIGHT PANEL: COUNCIL OUTPUT ── */
-    .council-panel {
-      padding: 32px;
       display: flex;
       flex-direction: column;
       gap: 24px;
+      height: calc(100vh - 85px);
       overflow-y: auto;
     }
 
-    .idle-state {
+    .section-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 14px;
+      color: var(--cyan);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
       display: flex;
-      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    textarea, input[type="text"] {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: 'Fira Code', monospace;
+      font-size: 13px;
+      padding: 12px;
+      transition: all 0.3s;
+    }
+    textarea:focus, input[type="text"]:focus {
+      outline: none;
+      border-color: var(--cyan);
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+    }
+    textarea { min-height: 120px; resize: vertical; }
+
+    .btn {
+      background: transparent;
+      border: 1px solid var(--cyan);
+      color: var(--cyan);
+      font-family: 'Orbitron', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      padding: 10px 20px;
+      cursor: pointer;
+      border-radius: 4px;
+      text-transform: uppercase;
+      transition: all 0.2s;
+      display: flex;
       align-items: center;
       justify-content: center;
-      height: 100%;
-      gap: 16px;
-      color: var(--muted);
+      gap: 8px;
     }
-
-    .idle-state .idle-icon {
-      font-size: 48px;
-      opacity: 0.3;
+    .btn:hover {
+      background: rgba(0, 240, 255, 0.1);
+      box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
-
-    .idle-state p {
-      font-size: 13px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+    .btn-solid {
+      background: var(--cyan);
+      color: #000;
     }
+    .btn-solid:hover {
+      background: #fff;
+      border-color: #fff;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+    }
+    .btn-small { padding: 4px 8px; font-size: 10px; }
 
-    /* ── PHASE BANNER ── */
-    .phase-banner {
+    /* ── SEAT BUILDER ── */
+    .seat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .seat-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      position: relative;
+    }
+    .seat-header {
       display: flex;
       align-items: center;
-      gap: 14px;
-      padding: 12px 18px;
-      border-radius: 8px;
-      border-left: 3px solid var(--chairman);
-      background: rgba(245,200,66,0.05);
-      animation: slidein 0.3s ease;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .seat-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      box-shadow: 0 0 8px currentColor;
+    }
+    .seat-title { font-weight: 600; font-size: 15px; }
+    .seat-model { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--muted); }
+    .seat-remove {
+      position: absolute; top: 12px; right: 12px;
+      color: var(--danger); cursor: pointer; font-size: 12px;
+    }
+    .seat-edit-fields {
+      display: flex; flex-direction: column; gap: 8px;
+      margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
     }
 
-    .phase-banner .ph-num {
-      font-family: 'Syne', sans-serif;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.15em;
-      color: var(--chairman);
+    /* ── RIGHT PANEL: COUNCIL ── */
+    .council-panel {
+      padding: 40px;
+      height: calc(100vh - 85px);
+      overflow-y: auto;
+      scroll-behavior: smooth;
     }
 
-    .phase-banner .ph-label {
-      font-size: 13px;
-      color: var(--text);
-      font-family: 'Syne', sans-serif;
-      font-weight: 600;
+    .phase-banner {
+      display: inline-flex;
+      align-items: center;
+      gap: 15px;
+      padding: 10px 20px;
+      border: 1px solid var(--pink);
+      background: rgba(255, 0, 255, 0.05);
+      border-radius: 4px;
+      margin: 30px 0 20px 0;
+      box-shadow: 0 0 15px rgba(255, 0, 255, 0.1);
     }
+    .phase-banner span { font-family: 'Orbitron', sans-serif; font-weight: 700; color: var(--pink); letter-spacing: 2px;}
 
-    /* ── COUNCIL CARDS ── */
     .cards-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
     }
 
     .council-card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-      animation: slidein 0.35s ease;
-      transition: border-color 0.2s;
+      border-radius: 8px;
+      padding: 20px;
+      backdrop-filter: var(--glass);
+      transition: all 0.3s;
     }
-
-    .council-card:hover { border-color: var(--border-bright); }
+    .council-card:hover { border-color: var(--border-bright); transform: translateY(-2px); }
+    
+    .chairman-card {
+      background: linear-gradient(145deg, rgba(255, 215, 0, 0.1), rgba(15, 15, 20, 0.9));
+      border: 1px solid var(--chairman);
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.15);
+    }
 
     .card-header {
-      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
       border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
     }
-
-    .card-icon {
-      font-size: 16px;
-      width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      display: grid;
-      place-items: center;
-    }
-
-    .card-name {
-      font-family: 'Syne', sans-serif;
-      font-size: 13px;
-      font-weight: 700;
-    }
-
-    .card-tag {
-      margin-left: auto;
-      font-size: 9px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--muted);
-      background: var(--surface2);
-      padding: 3px 8px;
-      border-radius: 20px;
-    }
-
+    .card-icon { font-size: 20px; }
+    .card-name { font-family: 'Orbitron', sans-serif; font-size: 14px; font-weight: 700; }
+    
     .card-body {
-      padding: 14px 16px;
-      font-size: 12px;
-      line-height: 1.75;
-      color: #C8C8D4;
-      white-space: pre-wrap;
-      word-break: break-word;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #D0D0E0;
     }
-
-    .thinking-pulse {
-      display: flex;
-      gap: 5px;
-      padding: 16px;
-      align-items: center;
+    .card-body h1, .card-body h2, .card-body h3 {
+      font-family: 'Rajdhani', sans-serif;
+      color: #fff;
+      margin: 16px 0 8px 0;
     }
+    .card-body strong { color: var(--cyan); }
+    .card-body ul { padding-left: 20px; margin-bottom: 12px; }
+    .card-body li { margin-bottom: 4px; }
 
-    .thinking-pulse span {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--muted);
-      animation: bounce 1.2s infinite;
-    }
-
-    .thinking-pulse span:nth-child(2) { animation-delay: 0.2s; }
-    .thinking-pulse span:nth-child(3) { animation-delay: 0.4s; }
-
-    @keyframes bounce {
-      0%, 100% { transform: translateY(0); opacity: 0.4; }
-      50% { transform: translateY(-5px); opacity: 1; }
-    }
-
-    /* ── CHAIRMAN CARD ── */
-    .chairman-card {
-      background: linear-gradient(135deg, rgba(245,200,66,0.08) 0%, var(--surface) 60%);
-      border: 1px solid rgba(245,200,66,0.25);
-      border-radius: 12px;
-      overflow: hidden;
-      animation: slidein 0.4s ease;
-    }
-
-    .chairman-card .card-header {
-      background: rgba(245,200,66,0.05);
-      border-bottom: 1px solid rgba(245,200,66,0.15);
-    }
-
-    .chairman-card .card-body {
-      font-size: 13px;
-      line-height: 1.8;
-      padding: 20px;
-    }
-
-    /* ── DONE STATE ── */
-    .done-bar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 18px;
+    /* ── DEBATE MODE / CHAT ── */
+    .debate-panel {
+      margin-top: 40px;
+      padding: 24px;
+      background: rgba(0, 240, 255, 0.05);
+      border: 1px solid var(--cyan);
       border-radius: 8px;
-      background: rgba(126,200,164,0.08);
-      border: 1px solid rgba(126,200,164,0.2);
-      font-size: 12px;
-      color: var(--gemini);
-      letter-spacing: 0.05em;
-      animation: slidein 0.3s ease;
+      display: none;
+    }
+    .debate-header {
+      font-family: 'Orbitron', sans-serif;
+      color: var(--cyan);
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .chat-history {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 20px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .chat-msg {
+      padding: 12px 16px;
+      border-radius: 6px;
+      max-width: 85%;
+    }
+    .chat-user {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      align-self: flex-end;
+    }
+    .chat-agent {
+      background: rgba(0, 240, 255, 0.08);
+      border: 1px solid var(--cyan);
+      align-self: flex-start;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 12px;
+    }
+    .chat-select {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--cyan);
+      padding: 10px;
+      font-family: 'Fira Code', monospace;
+      outline: none;
     }
 
-    /* ── PHASE DIVIDER ── */
-    .phase-section { display: flex; flex-direction: column; gap: 14px; }
-
-    @keyframes slidein {
-      from { opacity: 0; transform: translateY(12px); }
-      to   { opacity: 1; transform: translateY(0); }
+    /* ── TYPING INDICATOR ── */
+    .typing { display: flex; gap: 4px; padding: 10px 0; }
+    .typing span {
+      width: 6px; height: 6px; background: var(--cyan); border-radius: 50%;
+      animation: blink 1.4s infinite;
     }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
 
-    /* ── SCROLLBAR ── */
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
-
-    /* ── RESPONSIVE ── */
-    @media (max-width: 1100px) {
-      main { grid-template-columns: 320px 1fr; }
-      .cards-grid { grid-template-columns: 1fr; }
-    }
-
-    @media (max-width: 780px) {
-      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-      .input-panel { border-right: none; border-bottom: 1px solid var(--border); }
-      header { padding: 20px 24px; }
-      .input-panel, .council-panel { padding: 24px; }
-    }
   </style>
 </head>
+
 <body>
+  <div class="ambient-glow"></div>
+  <div class="ambient-glow-2"></div>
 
-<header>
-  <div class="logo-mark">⚖</div>
-  <div class="title-group">
-    <h1>LLM Council</h1>
-    <p>Multi-Model Sprint Decision Engine</p>
-  </div>
-  <div class="status-badge">
-    <div class="status-dot"></div>
-    LOCAL · v1.0
-  </div>
-</header>
-
-<main>
-
-  <!-- ── LEFT PANEL ── -->
-  <aside class="input-panel">
-
-    <div class="input-group">
-      <div class="panel-label">Sprint Overview — Text / JSON</div>
-      <textarea id="sprintText" placeholder="Paste your sprint plan, ticket list, or JSON summary here...&#10;&#10;e.g. Sprint 12 — Implement RAG pipeline&#10;- Ticket #42: Embed documents via OpenAI&#10;- Ticket #43: Integrate Weaviate&#10;- Ticket #44: API endpoint /search"></textarea>
+  <header>
+    <div class="logo-mark">SYS_OP</div>
+    <div class="title-group">
+      <h1>UNIVERSAL COUNCIL ENGINE</h1>
+      <p>MULTI-AGENT REASONING FRAMEWORK v2.0</p>
     </div>
+  </header>
 
-    <div class="input-group">
-      <div class="panel-label">Sprint Graph / Screenshot (optional)</div>
-      <div class="drop-zone" id="dropZone">
-        <input type="file" id="imageInput" accept="image/*">
-        <div class="dz-icon">📊</div>
-        <div class="dz-text">Drop sprint graph or click to upload</div>
-        <div class="dz-filename" id="fileName"></div>
+  <main>
+    <!-- LEFT PANEL: CONFIG -->
+    <aside class="config-panel">
+      
+      <div>
+        <div class="section-title">1. Context / Topic</div>
+        <textarea id="topicText" placeholder="Enter the topic, code, or proposal for the council to review..."></textarea>
       </div>
-      <img id="preview" alt="Sprint graph preview">
-    </div>
 
-    <div class="roster">
-      <div class="roster-header">Council Members</div>
-      <div class="member-row">
-        <div class="member-dot" style="background:#E8845A"></div>
-        <div class="member-name">Claude Sonnet</div>
-        <div class="member-role">Analysis</div>
+      <div>
+        <div class="section-title">
+          2. Council Roster 
+          <button class="btn btn-small" onclick="addSeat()">+ Add Seat</button>
+        </div>
+        <div class="seat-list" id="seatList">
+          <!-- Populated via JS -->
+        </div>
       </div>
-      <div class="member-row">
-        <div class="member-dot" style="background:#74B3CE"></div>
-        <div class="member-name">GPT-4o</div>
-        <div class="member-role">Analysis</div>
+
+      <button class="btn btn-solid" id="launchBtn" onclick="launchCouncil()" style="margin-top: 20px; font-size: 16px; padding: 15px;">
+        INITIALIZE COUNCIL
+      </button>
+
+    </aside>
+
+    <!-- RIGHT PANEL: OUTPUT -->
+    <section class="council-panel" id="councilPanel">
+      <div style="text-align: center; color: var(--muted); margin-top: 20vh; font-family: 'Fira Code', monospace;">
+        > AWAITING INITIALIZATION...
       </div>
-      <div class="member-row">
-        <div class="member-dot" style="background:#7EC8A4"></div>
-        <div class="member-name">Gemini Flash</div>
-        <div class="member-role">Analysis</div>
-      </div>
-      <div class="member-row">
-        <div class="member-dot" style="background:#F5C842"></div>
-        <div class="member-name">GPT-4o-mini</div>
-        <div class="member-role">Chairman</div>
-      </div>
-    </div>
+    </section>
+  </main>
 
-    <button class="launch-btn" id="launchBtn" onclick="launchCouncil()">
-      <span>⚖</span> Convene Council
-    </button>
-
-  </aside>
-
-  <!-- ── RIGHT PANEL ── -->
-  <section class="council-panel" id="councilPanel">
-    <div class="idle-state" id="idleState">
-      <div class="idle-icon">⚖</div>
-      <p>Awaiting sprint input</p>
-    </div>
-  </section>
-
-</main>
-
-<script>
-  // ── Drag & Drop / Preview ──────────────────────────────────────────
-
-  const dropZone  = document.getElementById('dropZone');
-  const imageInput = document.getElementById('imageInput');
-  const preview   = document.getElementById('preview');
-  const fileName  = document.getElementById('fileName');
-
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
-  });
-
-  imageInput.addEventListener('change', () => {
-    if (imageInput.files[0]) handleFile(imageInput.files[0]);
-  });
-
-  function handleFile(file) {
-    fileName.textContent = file.name;
-    const reader = new FileReader();
-    reader.onload = e => {
-      preview.src = e.target.result;
-      preview.style.display = 'block';
+  <script>
+    // ── STATE ──
+    let councilConfig = {
+      "arch": { label: "Architect (DeepSeek)", model: "openrouter/deepseek/deepseek-r1", color: "#00f0ff", icon: "🐋", persona: "You are a systems architect. Focus on scale and security." },
+      "prod": { label: "Product (Llama)", model: "openrouter/meta-llama/llama-3.3-70b-instruct", color: "#ff00ff", icon: "🦙", persona: "You are a product manager. Focus on UX and business value." },
+      "chairman": { label: "Chairman (GPT-4o)", model: "openrouter/meta-llama/llama-3.3-70b-instruct", color: "#FFD700", icon: "👑", persona: "You are the Chairman. Synthesize and make a final verdict." }
     };
-    reader.readAsDataURL(file);
-  }
 
-  // ── Council Launch ─────────────────────────────────────────────────
+    let chatHistory = [];
+    let rawCardContents = {};
+    let thinkingCards = {};
+    let ph2Section, ph3Section;
 
-  const MEMBER_META = {
-    claude:   { label: 'Claude Sonnet',       color: '#E8845A', icon: '⚡' },
-    gpt4o:    { label: 'GPT-4o',              color: '#74B3CE', icon: '🔮' },
-    gemini:   { label: 'Gemini Flash',        color: '#7EC8A4', icon: '✦' },
-    chairman: { label: 'Chairman · GPT-4o-mini', color: '#F5C842', icon: '👑' },
-  };
-
-  // Track cards per phase
-  let phase1Cards = {};
-  let phase2Cards = {};
-  let thinkingCards = {};
-
-  async function launchCouncil() {
-    const text  = document.getElementById('sprintText').value.trim();
-    const file  = imageInput.files[0];
-
-    if (!text && !file) {
-      alert('Please provide sprint text or upload an image.');
-      return;
+    // ── SEAT BUILDER UI ──
+    function renderSeats() {
+      const list = document.getElementById('seatList');
+      list.innerHTML = '';
+      for (const [id, seat] of Object.entries(councilConfig)) {
+        const isChairman = id === 'chairman';
+        const div = document.createElement('div');
+        div.className = 'seat-item';
+        div.innerHTML = `
+          <div class="seat-header">
+            <div class="seat-dot" style="background: ${seat.color}; color: ${seat.color}"></div>
+            <div class="seat-title">${seat.icon} ${seat.label}</div>
+            <div class="seat-model">${seat.model.split('/').pop()}</div>
+            ${!isChairman ? `<div class="seat-remove" onclick="removeSeat('${id}')">✕</div>` : ''}
+          </div>
+          <div class="seat-edit-fields">
+            <input type="text" value="${seat.persona}" onchange="updateSeat('${id}', 'persona', this.value)" placeholder="System Persona Prompt">
+          </div>
+        `;
+        list.appendChild(div);
+      }
     }
 
-    const btn   = document.getElementById('launchBtn');
-    const panel = document.getElementById('councilPanel');
-    btn.disabled = true;
-    btn.innerHTML = '<span>⏳</span> Council in session...';
+    function addSeat() {
+      const id = 'seat_' + Math.floor(Math.random() * 1000);
+      councilConfig[id] = {
+        label: "New Expert",
+        model: "openrouter/meta-llama/llama-3.3-70b-instruct",
+        color: "#" + Math.floor(Math.random()*16777215).toString(16),
+        icon: "🤖",
+        persona: "You are an expert."
+      };
+      renderSeats();
+    }
 
-    // Clear panel
-    panel.innerHTML = '';
-    phase1Cards = {};
-    phase2Cards = {};
-    thinkingCards = {};
+    function removeSeat(id) {
+      delete councilConfig[id];
+      renderSeats();
+    }
 
-    const formData = new FormData();
-    formData.append('sprint_text', text);
-    if (file) formData.append('image', file);
+    function updateSeat(id, field, value) {
+      if(councilConfig[id]) councilConfig[id][field] = value;
+    }
 
-    try {
-      const resp = await fetch('/council/stream', { method: 'POST', body: formData });
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+    renderSeats();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event = JSON.parse(line.slice(6));
-              handleEvent(event, panel);
-            } catch {}
+    // ── COUNCIL EXECUTION ──
+    async function launchCouncil() {
+      const topic = document.getElementById('topicText').value.trim();
+      if (!topic) return alert('Enter a topic first.');
+
+      const btn = document.getElementById('launchBtn');
+      const panel = document.getElementById('councilPanel');
+      btn.disabled = true;
+      btn.innerHTML = '> PROCESSING...';
+
+      panel.innerHTML = '';
+      rawCardContents = {};
+      thinkingCards = {};
+      chatHistory = [];
+
+      const formData = new FormData();
+      formData.append('topic_text', topic);
+      formData.append('council_config', JSON.stringify(councilConfig));
+
+      try {
+        const resp = await fetch('/council/stream', { method: 'POST', body: formData });
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try { handleEvent(JSON.parse(line.slice(6)), panel); } catch {}
+            }
           }
         }
+      } catch (err) {
+        panel.innerHTML += `<div style="color:var(--danger)">Error: ${err.message}</div>`;
       }
-    } catch (err) {
-      panel.innerHTML += `<div class="done-bar" style="border-color:rgba(224,92,92,0.4);color:#E05C5C;">✗ Error: ${err.message}</div>`;
+      
+      btn.disabled = false;
+      btn.innerHTML = 'INITIALIZE COUNCIL';
     }
 
-    btn.disabled = false;
-    btn.innerHTML = '<span>⚖</span> Convene Council';
-  }
+    function handleEvent(ev, panel) {
+      if (ev.type === 'phase_start') {
+        const banner = document.createElement('div');
+        banner.className = 'phase-banner';
+        banner.innerHTML = `<span>PHASE ${ev.phase} // ${ev.label.toUpperCase()}</span>`;
+        panel.appendChild(banner);
 
-  // ── Section containers ─────────────────────────────────────────────
-  let ph1Section = null;
-  let ph2Section = null;
-  let ph3Section = null;
-
-  function handleEvent(ev, panel) {
-    if (ev.type === 'phase_start') {
-      const section = document.createElement('div');
-      section.className = 'phase-section';
-
-      const banner = document.createElement('div');
-      banner.className = 'phase-banner';
-      banner.innerHTML = `<span class="ph-num">PHASE ${ev.phase}</span><span class="ph-label">${ev.label}</span>`;
-      section.appendChild(banner);
-
-      if (ev.phase === 1) {
         const grid = document.createElement('div');
         grid.className = 'cards-grid';
-        grid.id = 'grid-phase1';
-        section.appendChild(grid);
-        ph1Section = section;
-      } else if (ev.phase === 2) {
-        const grid = document.createElement('div');
-        grid.className = 'cards-grid';
-        grid.id = 'grid-phase2';
-        section.appendChild(grid);
-        ph2Section = section;
-      } else if (ev.phase === 3) {
-        ph3Section = section;
+        grid.id = `grid-phase${ev.phase}`;
+        panel.appendChild(grid);
+
+        if (ev.phase === 2) ph2Section = grid;
+        if (ev.phase === 3) ph3Section = grid;
+        grid.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        return;
       }
 
-      panel.appendChild(section);
-      section.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      return;
-    }
+      if (ev.type === 'member_thinking') {
+        const phase = ev.phase || 1;
+        const grid = document.getElementById(`grid-phase${phase}`);
+        if (!grid) return;
 
-    if (ev.type === 'member_thinking') {
-      const phase = ev.phase || 1;
-      const gridId = phase === 3 ? null : `grid-phase${phase}`;
-      const target = phase === 3 ? ph3Section : document.getElementById(gridId);
-      if (!target) return;
+        const card = buildCard(ev.member, ev.meta, null, phase);
+        grid.appendChild(card);
+        thinkingCards[`${ev.member}-${phase}`] = card;
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
 
-      const meta = MEMBER_META[ev.member] || {};
-      const card = buildCard(ev.member, meta, null, phase === 1 ? 'analysis' : (phase === 2 ? 'review' : 'decision'));
-      target.appendChild(card);
-      thinkingCards[`${ev.member}-${phase}`] = card;
-      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      return;
-    }
-
-    if (ev.type === 'member_analysis') {
-      const key = `${ev.member}-1`;
-      const existing = thinkingCards[key];
-      if (existing) {
-        existing.querySelector('.card-body').textContent = ev.content;
-        existing.querySelector('.thinking-pulse')?.remove();
-      } else {
-        const grid = document.getElementById('grid-phase1');
-        if (grid) {
-          const card = buildCard(ev.member, ev, ev.content, 'analysis');
-          grid.appendChild(card);
+      if (ev.type === 'member_token') {
+        let phase = 1;
+        if (ph3Section && ph3Section.contains(thinkingCards[`${ev.member}-3`])) phase = 3;
+        else if (ph2Section && ph2Section.contains(thinkingCards[`${ev.member}-2`])) phase = 2;
+        
+        const key = `${ev.member}-${phase}`;
+        const existing = thinkingCards[key];
+        
+        if (existing) {
+          const body = existing.querySelector('.card-body');
+          const pulse = existing.querySelector('.typing');
+          if (pulse) { pulse.remove(); body.style.display = 'block'; }
+          
+          if (!rawCardContents[key]) rawCardContents[key] = '';
+          rawCardContents[key] += ev.chunk;
+          body.innerHTML = marked.parse(rawCardContents[key]);
         }
+        return;
       }
-      return;
+
+      if (ev.type === 'done') {
+        showDebatePanel(panel);
+        return;
+      }
     }
 
-    if (ev.type === 'member_review') {
-      const key = `${ev.member}-2`;
-      const existing = thinkingCards[key];
-      if (existing) {
-        existing.querySelector('.card-body').textContent = ev.content;
-        existing.querySelector('.thinking-pulse')?.remove();
-      } else {
-        const grid = document.getElementById('grid-phase2');
-        if (grid) {
-          const card = buildCard(ev.member, ev, ev.content, 'review');
-          grid.appendChild(card);
+    function buildCard(member, meta, content, phase) {
+      const isChairman = member === 'chairman';
+      const card = document.createElement('div');
+      card.className = isChairman ? 'council-card chairman-card' : 'council-card';
+
+      const color = meta.color || '#888';
+      card.innerHTML = `
+        <div class="card-header">
+          <div class="card-icon" style="color:${color}">${meta.icon}</div>
+          <div class="card-name" style="color:${color}">${meta.label.toUpperCase()}</div>
+        </div>
+        <div class="typing"><span></span><span></span><span></span></div>
+        <div class="card-body" style="display:none"></div>
+      `;
+      return card;
+    }
+
+    // ── DEBATE MODE & EXPORT ──
+    function showDebatePanel(panel) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = `
+        <div class="debate-panel" style="display:block">
+          <div class="debate-header">
+            <span>> INTERACTIVE DEBATE MODE</span>
+            <button class="btn btn-small btn-solid" onclick="exportReport()">EXPORT REPORT</button>
+          </div>
+          <div class="chat-history" id="chatHistory"></div>
+          <div class="chat-input-row">
+            <select id="chatTarget" class="chat-select">
+              ${Object.entries(councilConfig).map(([id, cfg]) => `<option value="${id}">@${cfg.label}</option>`).join('')}
+            </select>
+            <input type="text" id="chatInput" placeholder="Ask a question..." onkeypress="if(event.key === 'Enter') sendChat()">
+            <button class="btn btn-solid" onclick="sendChat()" id="chatBtn">SEND</button>
+          </div>
+        </div>
+      `;
+      panel.appendChild(wrapper);
+      wrapper.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+
+    async function sendChat() {
+      const input = document.getElementById('chatInput');
+      const targetId = document.getElementById('chatTarget').value;
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      const historyDiv = document.getElementById('chatHistory');
+      
+      // Add user message
+      chatHistory.push({ role: 'user', content: msg });
+      const uMsg = document.createElement('div');
+      uMsg.className = 'chat-msg chat-user';
+      uMsg.textContent = msg;
+      historyDiv.appendChild(uMsg);
+      input.value = '';
+
+      // Add agent placeholder
+      const aMsg = document.createElement('div');
+      aMsg.className = 'chat-msg chat-agent';
+      aMsg.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+      historyDiv.appendChild(aMsg);
+      historyDiv.scrollTop = historyDiv.scrollHeight;
+
+      document.getElementById('chatBtn').disabled = true;
+
+      try {
+        const resp = await fetch('/council/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            member_id: targetId,
+            messages: chatHistory,
+            council_config: councilConfig
+          })
+        });
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullReply = '';
+        aMsg.innerHTML = ''; // clear typing
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'chat_token') {
+                  fullReply += ev.chunk;
+                  aMsg.innerHTML = marked.parse(fullReply);
+                  historyDiv.scrollTop = historyDiv.scrollHeight;
+                }
+              } catch {}
+            }
+          }
         }
+        chatHistory.push({ role: 'assistant', content: fullReply });
+      } catch (err) {
+        aMsg.innerHTML = `<span style="color:red">Error: ${err.message}</span>`;
       }
-      return;
+      document.getElementById('chatBtn').disabled = false;
     }
 
-    if (ev.type === 'chairman_decision') {
-      const key = `${ev.member}-3`;
-      const existing = thinkingCards[key];
-      if (existing) {
-        existing.querySelector('.card-body').textContent = ev.content;
-        existing.querySelector('.thinking-pulse')?.remove();
-      } else {
-        const card = buildChairmanCard(ev);
-        ph3Section.appendChild(card);
+    function exportReport() {
+      let md = "# Universal Council Report\n\n";
+      md += "## Topic\n" + document.getElementById('topicText').value + "\n\n";
+      
+      // Compile raw cards
+      for (const [key, content] of Object.entries(rawCardContents)) {
+        const [member, phase] = key.split('-');
+        const meta = councilConfig[member];
+        const phaseName = phase == 1 ? "Analysis" : (phase == 2 ? "Review" : "Verdict");
+        md += `## ${meta.label} - Phase ${phase} (${phaseName})\n\n`;
+        md += content + "\n\n---\n\n";
       }
-      return;
+
+      if (chatHistory.length > 0) {
+        md += "## Interactive Debate\n\n";
+        chatHistory.forEach(msg => {
+          md += `**${msg.role.toUpperCase()}**: ${msg.content}\n\n`;
+        });
+      }
+
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `council_report_${Date.now()}.md`;
+      a.click();
     }
-
-    if (ev.type === 'done') {
-      const bar = document.createElement('div');
-      bar.className = 'done-bar';
-      bar.textContent = '✓ Council session complete — verdict delivered';
-      panel.appendChild(bar);
-      bar.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      return;
-    }
-
-    if (ev.type === 'error') {
-      const bar = document.createElement('div');
-      bar.className = 'done-bar';
-      bar.style.cssText = 'border-color:rgba(224,92,92,0.4);color:#E05C5C;';
-      bar.textContent = `✗ ${ev.message}`;
-      panel.appendChild(bar);
-      return;
-    }
-  }
-
-  function buildCard(member, meta, content, tag) {
-    const isChairman = member === 'chairman';
-    const card = document.createElement('div');
-    card.className = isChairman ? 'chairman-card' : 'council-card';
-
-    const color = meta.color || '#888';
-    const icon  = meta.icon  || '●';
-    const label = meta.label || member;
-
-    card.innerHTML = `
-      <div class="card-header">
-        <div class="card-icon" style="background:${color}18;">${icon}</div>
-        <div class="card-name" style="color:${color}">${label}</div>
-        <div class="card-tag">${tag}</div>
-      </div>
-    `;
-
-    if (content) {
-      const body = document.createElement('div');
-      body.className = 'card-body';
-      body.textContent = content;
-      card.appendChild(body);
-    } else {
-      const pulse = document.createElement('div');
-      pulse.className = 'thinking-pulse';
-      pulse.innerHTML = '<span></span><span></span><span></span>';
-      card.appendChild(pulse);
-
-      const body = document.createElement('div');
-      body.className = 'card-body';
-      body.style.display = 'none';
-      card.appendChild(body);
-    }
-
-    return card;
-  }
-
-  function buildChairmanCard(ev) {
-    const card = buildCard('chairman', ev, ev.content, 'verdict');
-    card.className = 'chairman-card';
-    return card;
-  }
-</script>
+  </script>
 </body>
 </html>
