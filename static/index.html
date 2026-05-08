@@ -4,25 +4,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LLM Council - Universal Engine</title>
+  <title>LLM Council</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&family=Fira+Code:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <style>
     :root {
-      --bg: #030305;
-      --surface: rgba(15, 15, 20, 0.7);
-      --surface-hover: rgba(25, 25, 35, 0.8);
-      --border: rgba(0, 240, 255, 0.15);
-      --border-bright: rgba(0, 240, 255, 0.5);
-      --text: #E8E8EE;
-      --muted: #8A8A9E;
-      --cyan: #00f0ff;
-      --pink: #ff00ff;
-      --chairman: #FFD700;
-      --danger: #ff3366;
-      --glass: blur(12px);
+      --bg: #f4f1ea;
+      --surface: rgba(255, 255, 255, 0.74);
+      --surface-hover: rgba(255, 255, 255, 0.92);
+      --surface-strong: #ffffff;
+      --border: rgba(43, 61, 53, 0.12);
+      --border-strong: rgba(43, 61, 53, 0.24);
+      --text: #1f2823;
+      --muted: #6b756f;
+      --accent: #2f5d50;
+      --accent-soft: #dde7e1;
+      --warm: #9c7a4d;
+      --danger: #bb5e4f;
+      --chairman: #9c7a4d;
+      --glass: blur(16px);
+      --shadow: 0 18px 48px rgba(42, 52, 45, 0.08);
     }
 
     *, *::before, *::after {
@@ -32,115 +35,115 @@
     }
 
     body {
-      background: var(--bg);
+      background:
+        radial-gradient(circle at top left, rgba(214, 225, 218, 0.65), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(230, 223, 207, 0.7), transparent 34%),
+        linear-gradient(180deg, #f7f4ee 0%, #efebe3 100%);
       color: var(--text);
-      font-family: 'Rajdhani', sans-serif;
+      font-family: 'IBM Plex Sans', sans-serif;
       min-height: 100vh;
       overflow-x: hidden;
       display: flex;
       flex-direction: column;
     }
 
-    /* ── CYBERPUNK GRID & GLOW ── */
     body::before {
       content: '';
       position: fixed;
       inset: 0;
-      background-image: 
-        linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
-      background-size: 50px 50px;
+      background-image:
+        linear-gradient(rgba(47, 93, 80, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(47, 93, 80, 0.035) 1px, transparent 1px);
+      background-size: 72px 72px;
       pointer-events: none;
       z-index: -1;
+      opacity: 0.55;
     }
 
     .ambient-glow {
       position: fixed;
-      top: -10vw;
-      right: -10vw;
-      width: 40vw;
-      height: 40vw;
-      background: radial-gradient(circle, rgba(0, 240, 255, 0.1) 0%, transparent 70%);
+      top: -8vw;
+      right: -8vw;
+      width: 34vw;
+      height: 34vw;
+      background: radial-gradient(circle, rgba(117, 147, 134, 0.18) 0%, transparent 72%);
       border-radius: 50%;
       pointer-events: none;
       z-index: -1;
-      filter: blur(50px);
+      filter: blur(60px);
     }
     .ambient-glow-2 {
       position: fixed;
-      bottom: -10vw;
-      left: -10vw;
-      width: 40vw;
-      height: 40vw;
-      background: radial-gradient(circle, rgba(255, 0, 255, 0.08) 0%, transparent 70%);
+      bottom: -8vw;
+      left: -8vw;
+      width: 32vw;
+      height: 32vw;
+      background: radial-gradient(circle, rgba(186, 166, 132, 0.16) 0%, transparent 72%);
       border-radius: 50%;
       pointer-events: none;
       z-index: -1;
-      filter: blur(50px);
+      filter: blur(60px);
     }
 
-    /* ── HEADER ── */
     header {
-      padding: 20px 40px;
+      padding: 20px 32px;
       border-bottom: 1px solid var(--border);
-      background: rgba(3, 3, 5, 0.8);
+      background: rgba(247, 244, 238, 0.78);
       backdrop-filter: var(--glass);
       display: flex;
       align-items: center;
-      gap: 20px;
+      gap: 16px;
       position: sticky;
       top: 0;
       z-index: 100;
     }
 
     .logo-mark {
-      font-family: 'Orbitron', sans-serif;
-      font-weight: 900;
-      font-size: 24px;
-      color: var(--cyan);
-      text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
-      border: 1px solid var(--border-bright);
-      padding: 5px 12px;
-      border-radius: 4px;
-      background: rgba(0, 240, 255, 0.05);
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 500;
+      font-size: 13px;
+      color: var(--accent);
+      border: 1px solid var(--border-strong);
+      padding: 8px 11px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.68);
+      letter-spacing: 0.08em;
     }
 
     .title-group h1 {
-      font-family: 'Orbitron', sans-serif;
-      font-size: 20px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      color: #fff;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      color: var(--text);
     }
 
     .title-group p {
-      font-family: 'Fira Code', monospace;
-      font-size: 11px;
-      color: var(--pink);
-      letter-spacing: 0.1em;
-      margin-top: 2px;
+      font-family: 'Instrument Serif', serif;
+      font-size: 16px;
+      color: var(--muted);
+      margin-top: 1px;
     }
 
     .header-actions {
       margin-left: auto;
+      display: flex;
+      gap: 10px;
     }
 
-    /* ── MAIN LAYOUT ── */
     main {
       display: grid;
-      grid-template-columns: 420px 1fr;
+      grid-template-columns: 390px 1fr;
       flex: 1;
     }
 
-    /* ── SCROLLBAR ── */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: rgba(47, 93, 80, 0.22); border-radius: 3px; }
 
-    /* ── LEFT PANEL: CONFIG ── */
     .config-panel {
       border-right: 1px solid var(--border);
-      background: rgba(3, 3, 5, 0.6);
+      background: rgba(248, 245, 239, 0.72);
       backdrop-filter: var(--glass);
       padding: 24px;
       display: flex;
@@ -151,11 +154,11 @@
     }
 
     .section-title {
-      font-family: 'Orbitron', sans-serif;
+      font-family: 'IBM Plex Sans', sans-serif;
       font-size: 14px;
-      color: var(--cyan);
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: 0.01em;
       border-bottom: 1px solid var(--border);
       padding-bottom: 8px;
       display: flex;
@@ -163,36 +166,41 @@
       align-items: center;
     }
 
-    textarea, input[type="text"] {
+    textarea, input[type="text"], input[type="file"] {
       width: 100%;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 4px;
+      border-radius: 12px;
       color: var(--text);
-      font-family: 'Fira Code', monospace;
+      font-family: 'IBM Plex Mono', monospace;
       font-size: 13px;
-      padding: 12px;
+      padding: 13px 14px;
       transition: all 0.3s;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
     }
-    textarea:focus, input[type="text"]:focus {
+    textarea:focus, input[type="text"]:focus, input[type="file"]:focus {
       outline: none;
-      border-color: var(--cyan);
-      box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+      border-color: rgba(47, 93, 80, 0.32);
+      box-shadow: 0 0 0 4px rgba(47, 93, 80, 0.08);
     }
     textarea { min-height: 120px; resize: vertical; }
+    input[type="file"] {
+      padding: 10px 14px;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 12px;
+    }
 
     .btn {
-      background: transparent;
-      border: 1px solid var(--cyan);
-      color: var(--cyan);
-      font-family: 'Orbitron', sans-serif;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid var(--border-strong);
+      color: var(--text);
+      font-family: 'IBM Plex Sans', sans-serif;
       font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      padding: 10px 20px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      padding: 10px 18px;
       cursor: pointer;
-      border-radius: 4px;
-      text-transform: uppercase;
+      border-radius: 999px;
       transition: all 0.2s;
       display: flex;
       align-items: center;
@@ -200,21 +208,21 @@
       gap: 8px;
     }
     .btn:hover {
-      background: rgba(0, 240, 255, 0.1);
-      box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: var(--shadow);
+      transform: translateY(-1px);
     }
     .btn-solid {
-      background: var(--cyan);
-      color: #000;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #f7f4ee;
     }
     .btn-solid:hover {
-      background: #fff;
-      border-color: #fff;
-      box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+      background: #274e43;
+      border-color: #274e43;
     }
     .btn-small { padding: 4px 8px; font-size: 10px; }
 
-    /* ── SEAT BUILDER ── */
     .seat-list {
       display: flex;
       flex-direction: column;
@@ -223,9 +231,10 @@
     .seat-item {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px;
+      border-radius: 16px;
+      padding: 14px;
       position: relative;
+      box-shadow: 0 10px 28px rgba(42, 52, 45, 0.05);
     }
     .seat-header {
       display: flex;
@@ -238,7 +247,7 @@
       box-shadow: 0 0 8px currentColor;
     }
     .seat-title { font-weight: 600; font-size: 15px; }
-    .seat-model { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--muted); }
+    .seat-model { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); margin-left: auto; }
     .seat-remove {
       position: absolute; top: 12px; right: 12px;
       color: var(--danger); cursor: pointer; font-size: 12px;
@@ -247,10 +256,70 @@
       display: flex; flex-direction: column; gap: 8px;
       margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
     }
+    .inline-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .helper-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
+    .file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    .status-card {
+      background: rgba(255, 255, 255, 0.66);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 10px 24px rgba(42, 52, 45, 0.05);
+    }
+    .status-line {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-top: 6px;
+    }
+    .status-good { color: var(--accent); }
+    .status-bad { color: var(--danger); }
+    .status-warn { color: var(--warm); }
+    .preset-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .preset-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(42, 52, 45, 0.04);
+    }
+    .preset-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .preset-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 4px;
+    }
 
-    /* ── RIGHT PANEL: COUNCIL ── */
     .council-panel {
-      padding: 40px;
+      padding: 34px;
       height: calc(100vh - 85px);
       overflow-y: auto;
       scroll-behavior: smooth;
@@ -259,15 +328,15 @@
     .phase-banner {
       display: inline-flex;
       align-items: center;
-      gap: 15px;
-      padding: 10px 20px;
-      border: 1px solid var(--pink);
-      background: rgba(255, 0, 255, 0.05);
-      border-radius: 4px;
+      gap: 12px;
+      padding: 10px 18px;
+      border: 1px solid rgba(47, 93, 80, 0.16);
+      background: rgba(255, 255, 255, 0.64);
+      border-radius: 999px;
       margin: 30px 0 20px 0;
-      box-shadow: 0 0 15px rgba(255, 0, 255, 0.1);
+      box-shadow: 0 10px 30px rgba(42, 52, 45, 0.05);
     }
-    .phase-banner span { font-family: 'Orbitron', sans-serif; font-weight: 700; color: var(--pink); letter-spacing: 2px;}
+    .phase-banner span { font-family: 'IBM Plex Mono', monospace; font-weight: 500; color: var(--accent); letter-spacing: 0.04em;}
 
     .cards-grid {
       display: grid;
@@ -278,17 +347,17 @@
     .council-card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 18px;
       padding: 20px;
       backdrop-filter: var(--glass);
       transition: all 0.3s;
+      box-shadow: var(--shadow);
     }
-    .council-card:hover { border-color: var(--border-bright); transform: translateY(-2px); }
+    .council-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
     
     .chairman-card {
-      background: linear-gradient(145deg, rgba(255, 215, 0, 0.1), rgba(15, 15, 20, 0.9));
-      border: 1px solid var(--chairman);
-      box-shadow: 0 0 20px rgba(255, 215, 0, 0.15);
+      background: linear-gradient(145deg, rgba(156, 122, 77, 0.1), rgba(255, 255, 255, 0.92));
+      border: 1px solid rgba(156, 122, 77, 0.26);
     }
 
     .card-header {
@@ -300,34 +369,35 @@
       margin-bottom: 16px;
     }
     .card-icon { font-size: 20px; }
-    .card-name { font-family: 'Orbitron', sans-serif; font-size: 14px; font-weight: 700; }
+    .card-name { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; }
     
     .card-body {
       font-size: 15px;
       line-height: 1.6;
-      color: #D0D0E0;
+      color: #36413b;
     }
     .card-body h1, .card-body h2, .card-body h3 {
-      font-family: 'Rajdhani', sans-serif;
-      color: #fff;
+      font-family: 'IBM Plex Sans', sans-serif;
+      color: var(--text);
       margin: 16px 0 8px 0;
     }
-    .card-body strong { color: var(--cyan); }
+    .card-body strong { color: var(--accent); }
     .card-body ul { padding-left: 20px; margin-bottom: 12px; }
     .card-body li { margin-bottom: 4px; }
 
-    /* ── DEBATE MODE / CHAT ── */
     .debate-panel {
       margin-top: 40px;
       padding: 24px;
-      background: rgba(0, 240, 255, 0.05);
-      border: 1px solid var(--cyan);
-      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.68);
+      border: 1px solid var(--border);
+      border-radius: 18px;
       display: none;
+      box-shadow: var(--shadow);
     }
     .debate-header {
-      font-family: 'Orbitron', sans-serif;
-      color: var(--cyan);
+      font-family: 'IBM Plex Sans', sans-serif;
+      color: var(--text);
+      font-weight: 600;
       margin-bottom: 16px;
       display: flex;
       justify-content: space-between;
@@ -352,8 +422,8 @@
       align-self: flex-end;
     }
     .chat-agent {
-      background: rgba(0, 240, 255, 0.08);
-      border: 1px solid var(--cyan);
+      background: rgba(47, 93, 80, 0.08);
+      border: 1px solid rgba(47, 93, 80, 0.16);
       align-self: flex-start;
     }
     .chat-input-row {
@@ -363,39 +433,62 @@
     .chat-select {
       background: var(--surface);
       color: var(--text);
-      border: 1px solid var(--cyan);
+      border: 1px solid var(--border-strong);
       padding: 10px;
-      font-family: 'Fira Code', monospace;
+      font-family: 'IBM Plex Mono', monospace;
       outline: none;
+      border-radius: 12px;
     }
 
-    /* ── TYPING INDICATOR ── */
     .typing { display: flex; gap: 4px; padding: 10px 0; }
     .typing span {
-      width: 6px; height: 6px; background: var(--cyan); border-radius: 50%;
+      width: 6px; height: 6px; background: var(--accent); border-radius: 50%;
       animation: blink 1.4s infinite;
     }
     .typing span:nth-child(2) { animation-delay: 0.2s; }
     .typing span:nth-child(3) { animation-delay: 0.4s; }
     @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
 
-    /* ── MEMORY MODAL ── */
     .modal-overlay {
       position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px);
+      background: rgba(37, 42, 38, 0.22); backdrop-filter: blur(10px);
       z-index: 1000; display: none; align-items: center; justify-content: center;
     }
     .modal-content {
-      background: var(--surface); border: 1px solid var(--cyan);
-      border-radius: 8px; width: 80vw; height: 80vh;
+      background: rgba(247, 244, 238, 0.96); border: 1px solid var(--border);
+      border-radius: 22px; width: 80vw; height: 80vh;
       display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 24px 64px rgba(37, 42, 38, 0.18);
     }
     .modal-header {
-      padding: 16px; border-bottom: 1px solid var(--cyan);
+      padding: 16px; border-bottom: 1px solid var(--border);
       display: flex; justify-content: space-between; align-items: center;
-      font-family: 'Orbitron', sans-serif; color: var(--cyan);
+      font-family: 'IBM Plex Sans', sans-serif; color: var(--text); font-weight: 600;
     }
-    #memoryNetwork { flex: 1; background: #000; }
+    #memoryNetwork { flex: 1; background: #f8f5ef; }
+
+    @media (max-width: 980px) {
+      header {
+        padding: 16px 18px;
+        flex-wrap: wrap;
+      }
+      main {
+        grid-template-columns: 1fr;
+      }
+      .config-panel,
+      .council-panel {
+        height: auto;
+      }
+      .config-panel {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .section-title {
+        gap: 12px;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
 
   </style>
 </head>
@@ -405,29 +498,68 @@
   <div class="ambient-glow-2"></div>
 
   <header>
-    <div class="logo-mark">SYS_OP</div>
+    <div class="logo-mark">LLM COUNCIL</div>
     <div class="title-group">
-      <h1>UNIVERSAL COUNCIL ENGINE</h1>
-      <p>MULTI-AGENT REASONING FRAMEWORK v2.0</p>
+      <h1>Project Review Council</h1>
+      <p>Local multi-model analysis with memory, metrics, and hardware-aware routing.</p>
     </div>
     <div class="header-actions">
-      <button class="btn btn-small" onclick="viewMemory()">[ VIEW LONG-TERM MEMORY GRAPH ]</button>
+      <button class="btn btn-small" onclick="viewCodeGraph()">View code graph</button>
+      <button class="btn btn-small" onclick="viewMemory()">View memory graph</button>
     </div>
   </header>
 
   <main>
     <!-- LEFT PANEL: CONFIG -->
     <aside class="config-panel">
-      
       <div>
-        <div class="section-title">1. Context / Topic</div>
-        <textarea id="topicText" placeholder="Enter the topic, code, or proposal for the council to review..."></textarea>
+        <div class="section-title">0. Demo Mode</div>
+        <div class="preset-grid" id="presetGrid"></div>
+        <div class="helper-copy">Presets are the stable paths for a product demo. They set models, toggles, starter topic text, and recommended sample files.</div>
       </div>
 
       <div>
         <div class="section-title">
-          2. Council Roster 
-          <button class="btn btn-small" onclick="addSeat()">+ Add Seat</button>
+          Demo Preflight
+          <button class="btn btn-small" onclick="refreshPreflight()">Refresh checks</button>
+        </div>
+        <div class="status-card" id="preflightBox">
+          <div class="status-line">Checking local models and input compatibility...</div>
+        </div>
+      </div>
+      
+      <div>
+        <div class="section-title">1. Context / Topic</div>
+        <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or a focused review request..."></textarea>
+        <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos. Text-like files are folded into the council prompt; image files are sent as visual inputs when the model supports them.</div>
+        <input type="file" id="attachmentInput" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
+        <div class="file-list" id="fileList"></div>
+        <div class="inline-actions" id="sampleActions"></div>
+      </div>
+
+      <div>
+        <div class="section-title">2. Model Profile</div>
+        <div class="inline-actions">
+          <button class="btn btn-small" onclick="applyModelProfile('turbo')">Turbo / low latency</button>
+          <button class="btn btn-small" onclick="applyModelProfile('balanced')">Balanced</button>
+          <button class="btn btn-small" onclick="applyModelProfile('quality')">Quality</button>
+        </div>
+        <div class="helper-copy">Profiles swap the council between smaller and larger local Ollama models. You can still override any seat manually.</div>
+      </div>
+
+      <div>
+        <div class="section-title">
+          3. Council Roster 
+          <div>
+            <label style="color:var(--muted); margin-right: 15px; font-size: 13px;">
+              <input type="checkbox" id="dynamicSwarmToggle"> 🌀 Dynamic Swarm
+            </label>
+            <label style="color:var(--muted); margin-right: 15px; font-size: 13px;">
+              <input type="checkbox" id="deepDebateToggle"> ⚖️ Deep Debate (Slower)
+            </label>
+            <button class="btn btn-small" onclick="autoConfigureHardware()" style="margin-right: 8px;">Auto-tune hardware</button>
+            <button class="btn btn-small" onclick="addSeat()">Add seat</button>
+          </div>
         </div>
         <div class="seat-list" id="seatList">
           <!-- Populated via JS -->
@@ -435,7 +567,7 @@
       </div>
 
       <button class="btn btn-solid" id="launchBtn" onclick="launchCouncil()" style="margin-top: 20px; font-size: 16px; padding: 15px;">
-        INITIALIZE COUNCIL
+        Run council
       </button>
 
     </aside>
@@ -443,7 +575,7 @@
     <!-- RIGHT PANEL: OUTPUT -->
     <section class="council-panel" id="councilPanel">
       <div style="text-align: center; color: var(--muted); margin-top: 20vh; font-family: 'Fira Code', monospace;">
-        > AWAITING INITIALIZATION...
+        Ready for a project brief.
       </div>
     </section>
   </main>
@@ -451,7 +583,7 @@
   <div class="modal-overlay" id="memoryModal">
     <div class="modal-content">
       <div class="modal-header">
-        <span>> KNOWLEDGE GRAPH (LONG-TERM MEMORY)</span>
+        <span id="modalTitle">Knowledge graph</span>
         <button class="btn btn-small" onclick="closeMemory()">X</button>
       </div>
       <div id="memoryNetwork"></div>
@@ -461,15 +593,169 @@
   <script>
     // ── STATE ──
     let councilConfig = {
-      "arch": { label: "Architect (DeepSeek)", model: "openrouter/deepseek/deepseek-r1", color: "#00f0ff", icon: "🐋", persona: "You are a systems architect. Focus on scale and security." },
-      "prod": { label: "Product (Llama)", model: "openrouter/meta-llama/llama-3.3-70b-instruct", color: "#ff00ff", icon: "🦙", persona: "You are a product manager. Focus on UX and business value." },
-      "chairman": { label: "Chairman (GPT-4o)", model: "openrouter/meta-llama/llama-3.3-70b-instruct", color: "#FFD700", icon: "👑", persona: "You are the Chairman. Synthesize and make a final verdict." }
+      "architect": { label: "Lead Architect", model: "ollama/qwen2.5:7b", color: "#4D6BFE", icon: "🐋", persona: "You are the Lead Architect. Focus on SOLID principles, design patterns, maintainability, and code structure. Favor pragmatic, local-first solutions and call out unnecessary complexity." },
+      "security": { label: "Security Auditor", model: "ollama/gemma2:9b", color: "#FF4444", icon: "🛡️", persona: "You are the Senior Security Auditor. Focus strictly on OWASP vulnerabilities, injection flaws, unsafe defaults, and exposure risk. Prefer defenses that work in local self-hosted deployments." },
+      "perf": { label: "Performance Eng", model: "ollama/llama3.1:8b", color: "#00FF00", icon: "⚡", persona: "You are the Performance Engineer. Focus on algorithmic cost, memory pressure, context bloat, and latency. Optimize for hardware-constrained local inference." },
+      "chairman": { label: "Chairman", model: "ollama/qwen2.5:7b", color: "#F5C842", icon: "👑", persona: "You are the Chairman. Synthesize the council and make a final verdict. Prefer recommendations that preserve free, open-weight, local execution." }
     };
 
     let chatHistory = [];
     let rawCardContents = {};
     let thinkingCards = {};
     let ph2Section, ph3Section;
+    let selectedFiles = [];
+    let demoCatalog = null;
+    let preflightState = null;
+
+    const MODEL_PROFILES = {
+      turbo: {
+        architect: "ollama/qwen2.5:3b",
+        security: "ollama/gemma2:2b",
+        perf: "ollama/llama3.2:3b",
+        chairman: "ollama/qwen2.5:3b"
+      },
+      balanced: {
+        architect: "ollama/qwen2.5:7b",
+        security: "ollama/gemma2:9b",
+        perf: "ollama/llama3.1:8b",
+        chairman: "ollama/qwen2.5:7b"
+      },
+      quality: {
+        architect: "ollama/qwen2.5:14b",
+        security: "ollama/deepseek-r1:14b",
+        perf: "ollama/llama3.1:8b",
+        chairman: "ollama/qwen2.5:14b"
+      }
+    };
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function syncToggles(preset) {
+      document.getElementById('deepDebateToggle').checked = Boolean(preset.deep_debate);
+      document.getElementById('dynamicSwarmToggle').checked = Boolean(preset.dynamic_swarm);
+    }
+
+    function renderPresets() {
+      const grid = document.getElementById('presetGrid');
+      if (!demoCatalog) {
+        grid.innerHTML = '<div class="status-line">Loading demo presets...</div>';
+        return;
+      }
+
+      grid.innerHTML = demoCatalog.presets.map(preset => `
+        <div class="preset-card">
+          <div class="preset-title">${escapeHtml(preset.label)}</div>
+          <div class="preset-desc">${escapeHtml(preset.description)}</div>
+          <div class="inline-actions">
+            <button class="btn btn-small" onclick="applyDemoPreset('${preset.id}')">Use preset</button>
+            <button class="btn btn-small" onclick="loadPresetSamples('${preset.id}')">Load sample files</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderSampleActions() {
+      const box = document.getElementById('sampleActions');
+      if (!demoCatalog) {
+        box.innerHTML = '';
+        return;
+      }
+      box.innerHTML = demoCatalog.samples.map(sample => `
+        <button class="btn btn-small" onclick="attachSample('${sample.id}')">${escapeHtml(sample.label)}</button>
+      `).join('');
+    }
+
+    async function fetchDemoCatalog() {
+      try {
+        const resp = await fetch('/demo/catalog');
+        demoCatalog = await resp.json();
+        renderPresets();
+        renderSampleActions();
+      } catch (e) {
+        console.error('Failed to load demo catalog', e);
+      }
+    }
+
+    async function attachSample(sampleId) {
+      if (!demoCatalog) return;
+      const sample = demoCatalog.samples.find(item => item.id === sampleId);
+      if (!sample) return;
+
+      const resp = await fetch(`/demo-samples/${sample.filename}`);
+      const blob = await resp.blob();
+      const file = new File([blob], sample.filename, { type: sample.content_type || blob.type || 'text/plain' });
+      selectedFiles = [...selectedFiles, file];
+      renderSelectedFiles();
+      refreshPreflight();
+    }
+
+    async function loadPresetSamples(presetId) {
+      if (!demoCatalog) return;
+      const preset = demoCatalog.presets.find(item => item.id === presetId);
+      if (!preset) return;
+      selectedFiles = [];
+      for (const sampleId of preset.sample_ids || []) {
+        await attachSample(sampleId);
+      }
+      renderSelectedFiles();
+      refreshPreflight();
+    }
+
+    async function applyDemoPreset(presetId) {
+      if (!demoCatalog) return;
+      const preset = demoCatalog.presets.find(item => item.id === presetId);
+      if (!preset) return;
+
+      councilConfig = JSON.parse(JSON.stringify(preset.config));
+      document.getElementById('topicText').value = preset.topic || '';
+      syncToggles(preset);
+      renderSeats();
+      refreshPreflight();
+    }
+
+    async function refreshPreflight() {
+      const box = document.getElementById('preflightBox');
+      box.innerHTML = '<div class="status-line">Running preflight checks...</div>';
+      try {
+        const resp = await fetch('/ollama/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            council_config: councilConfig,
+            attachment_names: selectedFiles.map(file => file.name)
+          })
+        });
+        preflightState = await resp.json();
+
+        const statusClass = preflightState.ready ? 'status-good' : 'status-bad';
+        const warnings = preflightState.warnings || [];
+        const warningHtml = warnings.map(item => `<div class="status-line status-warn">${escapeHtml(item)}</div>`).join('');
+        const missingHtml = (preflightState.missing || []).length
+          ? `<div class="status-line status-bad">Missing models: ${escapeHtml(preflightState.missing.join(', '))}</div>`
+          : `<div class="status-line status-good">All required local models are installed.</div>`;
+        const visionHtml = selectedFiles.some(file => file.type.startsWith('image/'))
+          ? `<div class="status-line ${preflightState.vision_seats.length ? 'status-good' : 'status-warn'}">Vision seats: ${escapeHtml((preflightState.vision_seats || []).join(', ') || 'none')}</div>`
+          : '';
+
+        box.innerHTML = `
+          <div class="preset-title ${statusClass}">${preflightState.ready ? 'Demo roster ready' : 'Demo roster blocked'}</div>
+          <div class="status-line">Installed local models: ${escapeHtml((preflightState.installed || []).join(', ') || 'none detected')}</div>
+          ${missingHtml}
+          ${visionHtml}
+          ${warningHtml || '<div class="status-line">No demo warnings for the current setup.</div>'}
+        `;
+      } catch (e) {
+        console.error('Failed to refresh preflight', e);
+        box.innerHTML = '<div class="status-line status-bad">Preflight failed. Check that the backend is running.</div>';
+      }
+    }
 
     // ── SEAT BUILDER UI ──
     function renderSeats() {
@@ -487,6 +773,7 @@
             ${!isChairman ? `<div class="seat-remove" onclick="removeSeat('${id}')">✕</div>` : ''}
           </div>
           <div class="seat-edit-fields">
+            <input type="text" value="${seat.model}" onchange="updateSeat('${id}', 'model', this.value)" placeholder="Model, e.g. ollama/qwen2.5:3b">
             <input type="text" value="${seat.persona}" onchange="updateSeat('${id}', 'persona', this.value)" placeholder="System Persona Prompt">
           </div>
         `;
@@ -498,29 +785,109 @@
       const id = 'seat_' + Math.floor(Math.random() * 1000);
       councilConfig[id] = {
         label: "New Expert",
-        model: "openrouter/meta-llama/llama-3.3-70b-instruct",
+        model: "ollama/qwen2.5:7b",
         color: "#" + Math.floor(Math.random()*16777215).toString(16),
         icon: "🤖",
         persona: "You are an expert."
       };
       renderSeats();
+      refreshPreflight();
     }
 
     function removeSeat(id) {
       delete councilConfig[id];
       renderSeats();
+      refreshPreflight();
     }
 
     function updateSeat(id, field, value) {
       if(councilConfig[id]) councilConfig[id][field] = value;
+      if (field === 'model') {
+        renderSeats();
+        refreshPreflight();
+      }
+    }
+
+    function applyModelProfile(profile) {
+      const profileConfig = MODEL_PROFILES[profile];
+      if (!profileConfig) return;
+
+      for (const [id, seat] of Object.entries(councilConfig)) {
+        if (profileConfig[id]) {
+          seat.model = profileConfig[id];
+        } else if (id !== 'chairman') {
+          seat.model = profileConfig.architect;
+        }
+      }
+
+      renderSeats();
+      refreshPreflight();
+    }
+
+    function renderSelectedFiles() {
+      const fileList = document.getElementById('fileList');
+      if (!selectedFiles.length) {
+        fileList.innerHTML = '';
+        return;
+      }
+      fileList.innerHTML = selectedFiles.map(file => {
+        const sizeKb = Math.max(1, Math.round(file.size / 1024));
+        return `<div>${file.name} <span style="color:var(--warm)">(${sizeKb} KB)</span></div>`;
+      }).join('');
+    }
+
+    async function autoConfigureHardware() {
+      try {
+        const resp = await fetch('/hardware/suggest');
+        const data = await resp.json();
+        
+        // Alert the user about their detected hardware
+        alert(`Hardware Scan Complete.\n\nDetected RAM: ${data.ram_gb} GB\nHardware Tier: ${data.tier_name}\n\nUpdating Council Config to use optimized local Ollama models...`);
+        
+        // Overwrite the existing config
+        councilConfig = data.config;
+        renderSeats();
+        refreshPreflight();
+      } catch (e) {
+        console.error(e);
+        alert("Failed to auto-configure hardware. Is the backend running?");
+      }
+    }
+
+    async function loadHardwareDefaults() {
+      try {
+        const resp = await fetch('/hardware/suggest');
+        const data = await resp.json();
+        if (data && data.config) {
+          councilConfig = data.config;
+          renderSeats();
+          refreshPreflight();
+        }
+      } catch (e) {
+        console.error('Failed to load hardware defaults', e);
+      }
     }
 
     renderSeats();
+    fetchDemoCatalog();
+    loadHardwareDefaults();
+    document.getElementById('attachmentInput').addEventListener('change', (event) => {
+      selectedFiles = Array.from(event.target.files || []);
+      renderSelectedFiles();
+      refreshPreflight();
+    });
 
     // ── COUNCIL EXECUTION ──
     async function launchCouncil() {
       const topic = document.getElementById('topicText').value.trim();
-      if (!topic) return alert('Enter a topic first.');
+      if (!topic && !selectedFiles.length) return alert('Enter a topic or attach at least one file.');
+      await refreshPreflight();
+      if (!preflightState || !preflightState.ready) {
+        return alert('Demo preflight failed. Install the missing models or switch to a preset that matches your local setup.');
+      }
+      if ((preflightState.warnings || []).some(item => item.includes('no seat is using a known vision-capable local model'))) {
+        return alert('You selected image attachments without a vision-capable seat. Switch to the Vision Review preset or change one model before launching.');
+      }
 
       const btn = document.getElementById('launchBtn');
       const panel = document.getElementById('councilPanel');
@@ -535,6 +902,19 @@
       const formData = new FormData();
       formData.append('topic_text', topic);
       formData.append('council_config', JSON.stringify(councilConfig));
+      for (const file of selectedFiles) {
+        formData.append('attachments', file);
+      }
+      
+      const swarmToggle = document.getElementById('dynamicSwarmToggle');
+      if (swarmToggle && swarmToggle.checked) {
+          formData.append('dynamic_swarm', true);
+      }
+      
+      const debateToggle = document.getElementById('deepDebateToggle');
+      if (debateToggle && debateToggle.checked) {
+          formData.append('deep_debate', true);
+      }
 
       try {
         const resp = await fetch('/council/stream', { method: 'POST', body: formData });
@@ -563,6 +943,14 @@
     }
 
     function handleEvent(ev, panel) {
+      if (ev.type === 'warning') {
+        const warning = document.createElement('div');
+        warning.className = 'status-card';
+        warning.innerHTML = `<div class="preset-title status-warn">Runtime fallback</div><div class="status-line status-warn">${escapeHtml(ev.message || 'A warning occurred.')}</div>`;
+        panel.appendChild(warning);
+        return;
+      }
+
       if (ev.type === 'phase_start') {
         const banner = document.createElement('div');
         banner.className = 'phase-banner';
@@ -607,7 +995,43 @@
           
           if (!rawCardContents[key]) rawCardContents[key] = '';
           rawCardContents[key] += ev.chunk;
-          body.innerHTML = marked.parse(rawCardContents[key]);
+          if (ev.member !== 'chairman') {
+            body.innerHTML = marked.parse(rawCardContents[key]);
+          } else {
+            // While streaming Chairman JSON, just show the raw text safely
+            body.innerHTML = "<pre style='color:var(--muted); font-size:12px'>" + rawCardContents[key] + "</pre>";
+          }
+        }
+        return;
+      }
+      
+      if (ev.type === 'member_done') {
+        let phase = 1;
+        if (ph3Section && ph3Section.contains(thinkingCards[`${ev.member}-3`])) phase = 3;
+        else if (ph2Section && ph2Section.contains(thinkingCards[`${ev.member}-2`])) phase = 2;
+        const key = `${ev.member}-${phase}`;
+        const existing = thinkingCards[key];
+        
+        if (existing && ev.member === 'chairman') {
+          const body = existing.querySelector('.card-body');
+          try {
+            const data = JSON.parse(ev.full_text);
+            let riskColor = "var(--cyan)";
+            if (data.risk_score >= 8) riskColor = "var(--danger)";
+            else if (data.risk_score >= 5) riskColor = "var(--pink)";
+
+            let html = `
+              <h2>VERDICT: ${data.verdict}</h2>
+              <div style="font-size: 24px; color: ${riskColor}; font-family: 'Orbitron'; margin: 10px 0;">RISK SCORE: ${data.risk_score}/10</div>
+              <h3>Action Items:</h3>
+              <ul>${(data.action_items || []).map(a => `<li>${a}</li>`).join('')}</ul>
+            `;
+            if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${c}</li>`).join('')}</ul>`;
+            if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${d}</li>`).join('')}</ul>`;
+            body.innerHTML = html;
+          } catch (e) {
+            body.innerHTML = marked.parse(ev.full_text);
+          }
         }
         return;
       }
@@ -757,6 +1181,7 @@
     // ── MEMORY GRAPH VISUALIZATION ──
     async function viewMemory() {
       const modal = document.getElementById('memoryModal');
+      document.getElementById('modalTitle').textContent = 'Knowledge graph';
       modal.style.display = 'flex';
       
       try {
@@ -790,6 +1215,40 @@
 
     function closeMemory() {
       document.getElementById('memoryModal').style.display = 'none';
+    }
+
+    async function viewCodeGraph() {
+      const modal = document.getElementById('memoryModal');
+      document.getElementById('modalTitle').textContent = 'Project code graph';
+      modal.style.display = 'flex';
+
+      try {
+        const resp = await fetch('/project/code-graph');
+        const data = await resp.json();
+
+        const container = document.getElementById('memoryNetwork');
+        const options = {
+          nodes: {
+            shape: 'dot',
+            size: 14,
+            font: { color: '#1f2823', face: 'IBM Plex Mono', size: 12 },
+            color: { background: '#dbe5df', border: '#2f5d50' }
+          },
+          edges: {
+            width: 1.5,
+            color: { color: 'rgba(47, 93, 80, 0.35)', highlight: '#9c7a4d' },
+            font: { color: '#6b756f', face: 'IBM Plex Mono', size: 10, align: 'horizontal' },
+            arrows: { to: { enabled: true, scaleFactor: 0.45 } },
+            smooth: { type: 'continuous' }
+          },
+          physics: { barnesHut: { gravitationalConstant: -2200, centralGravity: 0.28 } }
+        };
+
+        new vis.Network(container, { nodes: data.nodes, edges: data.edges }, options);
+      } catch (e) {
+        console.error(e);
+        alert("Failed to load code graph.");
+      }
     }
   </script>
 </body>

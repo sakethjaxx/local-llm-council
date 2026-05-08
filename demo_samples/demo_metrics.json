@@ -1,0 +1,20 @@
+{
+  "runs_seen": 12,
+  "completed_runs": 10,
+  "failed_runs": 2,
+  "avg_completed_duration_ms": 6120,
+  "by_model": {
+    "ollama/qwen2.5:7b": {
+      "calls": 18,
+      "successes": 16,
+      "failures": 2,
+      "total_duration_ms": 81234
+    },
+    "ollama/deepseek-r1:8b": {
+      "calls": 6,
+      "successes": 6,
+      "failures": 0,
+      "total_duration_ms": 45882
+    }
+  }
+}

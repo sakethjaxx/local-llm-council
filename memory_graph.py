@@ -1,9 +1,32 @@
 import networkx as nx
 import json
 import os
+import re
 import litellm
+from pydantic import BaseModel
+from typing import List
+
+class Triple(BaseModel):
+    subject: str
+    predicate: str
+    object: str
+
+class MemoryExtraction(BaseModel):
+    triples: List[Triple]
+
+class MemoryKeywords(BaseModel):
+    keywords: List[str]
 
 MEMORY_FILE = "council_memory.json"
+
+
+def _extract_json_block(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    return raw
 
 class GraphMemory:
     def __init__(self):
@@ -30,34 +53,27 @@ class GraphMemory:
     async def extract_memory(self, topic: str, verdict: str, extraction_model: str):
         prompt = f"""You are an information extraction engine for an AI council.
 Given the topic discussed and the final verdict delivered by the Chairman, extract the core knowledge as a list of facts.
-Format your output STRICTLY as a JSON array of arrays, where each inner array is a triple: ["Subject", "Predicate", "Object"].
-Keep subjects and objects concise (1-4 words).
+Use the provided JSON schema to output an array of triples under the 'triples' key.
+Each triple has a subject, predicate, and object. Keep subjects and objects concise (1-4 words).
 Examples of predicates: "decided_to_use", "rejected", "identified_risk", "recommended".
 
 Topic: {topic[:500]}...
-Verdict: {verdict[:1500]}...
-
-Return ONLY the raw JSON array. No markdown code blocks, no explanations."""
+Verdict: {verdict[:1500]}..."""
         try:
             print(f"\n[🧠 Memory] Extracting triples using {extraction_model}...")
             resp = await litellm.acompletion(
                 model=extraction_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=500
+                max_tokens=500,
+                response_format=MemoryExtraction
             )
-            raw_output = resp.choices[0].message.content.strip()
-            if raw_output.startswith("```json"):
-                raw_output = raw_output[7:-3]
-            elif raw_output.startswith("```"):
-                raw_output = raw_output[3:-3]
-                
-            triples = json.loads(raw_output.strip())
+            raw_output = resp.choices[0].message.content
+
+            data = MemoryExtraction.model_validate_json(_extract_json_block(raw_output))
             added = 0
-            for t in triples:
-                if len(t) == 3:
-                    u, rel, v = t
-                    self.graph.add_edge(u, v, label=rel)
-                    added += 1
+            for t in data.triples:
+                self.graph.add_edge(t.subject, t.object, label=t.predicate)
+                added += 1
                     
             print(f"[✅ Memory] Successfully added {added} facts to Long-Term Knowledge Graph.")
             self._save()
@@ -70,21 +86,19 @@ Return ONLY the raw JSON array. No markdown code blocks, no explanations."""
             
         prompt = f"""Given the following new topic, identify up to 3 core concepts (1-2 words each) to search our memory graph for.
 Topic: {topic[:500]}...
-Return ONLY a JSON array of strings, e.g. ["PostgreSQL", "Authentication"]."""
+Use the provided JSON schema to return an array of strings under the 'keywords' key."""
 
         try:
             resp = await litellm.acompletion(
                 model=extraction_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=100
+                max_tokens=100,
+                response_format=MemoryKeywords
             )
-            raw = resp.choices[0].message.content.strip()
-            if raw.startswith("```json"):
-                raw = raw[7:-3]
-            elif raw.startswith("```"):
-                raw = raw[3:-3]
-                
-            keywords = json.loads(raw.strip())
+            raw = resp.choices[0].message.content
+
+            data = MemoryKeywords.model_validate_json(_extract_json_block(raw))
+            keywords = data.keywords
             
             # Simple keyword matching in graph
             relevant_edges = []

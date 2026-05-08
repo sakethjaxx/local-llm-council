@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 venv/
+council_metrics.jsonl
+council_memory.json
+project_code_graph.json
+project_code_graph.graphml
+.code-review-graph/
