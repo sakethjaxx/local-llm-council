@@ -1,6 +1,7 @@
 from duckduckgo_search import DDGS
 import asyncio
 import litellm
+from cloud_keys import litellm_kwargs_for_model
 
 async def get_search_context(reviews: dict, extraction_model: str) -> str:
     # 1. Ask LLM if there is a factual dispute
@@ -13,7 +14,8 @@ async def get_search_context(reviews: dict, extraction_model: str) -> str:
         resp = await litellm.acompletion(
             model=extraction_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=20
+            max_tokens=20,
+            **litellm_kwargs_for_model(extraction_model),
         )
         query = resp.choices[0].message.content.strip().replace('"', '')
         if query.upper() == "NONE" or len(query) > 50:

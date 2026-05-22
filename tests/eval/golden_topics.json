@@ -1,0 +1,36 @@
+{
+  "version": "1",
+  "model_pin": "ollama/qwen2.5:7b",
+  "topics": [
+    {
+      "id": "code_review",
+      "topic": "Review this Python function for bugs and performance: def get_user(id): return db.query('SELECT * FROM users WHERE id=' + str(id))",
+      "reference_verdict": "Critical SQL injection vulnerability. String concatenation in query. Must use parameterized queries. No input validation. No error handling.",
+      "minimum_score": 0.65
+    },
+    {
+      "id": "architecture_decision",
+      "topic": "Should we use a microservices architecture or a monolith for a new 3-person startup building a SaaS product?",
+      "reference_verdict": "Monolith recommended for 3-person team. Microservices add operational complexity that outweighs benefits at small scale. Start monolith, extract services when bottlenecks identified.",
+      "minimum_score": 0.6
+    },
+    {
+      "id": "ethics_tradeoff",
+      "topic": "Our ML model achieves 95% accuracy overall but only 78% accuracy for minority demographic groups. Should we ship it?",
+      "reference_verdict": "Do not ship without addressing disparity. 17-point accuracy gap is discriminatory. Requires rebalancing training data, fairness constraints, or separate models per group. Legal and ethical risk.",
+      "minimum_score": 0.55
+    },
+    {
+      "id": "factual_dispute",
+      "topic": "Team is split: engineer A says Redis is the right cache layer, engineer B says Memcached is better. Evaluate for a session store with 10M daily active users.",
+      "reference_verdict": "Redis preferred. Supports persistence, richer data structures, pub/sub, cluster mode. Memcached faster for pure string cache but lacks Redis's reliability features for session storage at scale.",
+      "minimum_score": 0.6
+    },
+    {
+      "id": "data_pipeline",
+      "topic": "Design a data pipeline to ingest 500GB/day of JSON logs, run 3 transformation steps, and expose results via API. Budget is zero for managed cloud services.",
+      "reference_verdict": "Use Kafka or Redpanda for ingestion. Apache Spark or DuckDB for batch transforms. Store results in PostgreSQL or ClickHouse. Serve via FastAPI. All open-source, zero managed cost.",
+      "minimum_score": 0.55
+    }
+  ]
+}

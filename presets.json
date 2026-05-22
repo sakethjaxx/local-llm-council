@@ -1,0 +1,233 @@
+{
+  "version": "1",
+  "presets": [
+    {
+      "id": "fast",
+      "label": "Fast Triage",
+      "description": "Low-latency council for a controlled architecture or product brief demo.",
+      "topic": "Review this local-first AI council project for architectural clarity, practical risks, and the next three improvements to ship.",
+      "topic_placeholder": "Review this local-first AI council project for architectural clarity, practical risks, and the next three improvements to ship.",
+      "deep_debate": false,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": false, "dynamic_swarm": false},
+      "sample_ids": ["architecture-brief"],
+      "sample_files": ["architecture_brief.md"],
+      "chairman_model": "ollama/qwen2.5:7b",
+      "seats": [
+        {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Focus on architecture, maintainability, and simplification."
+        },
+        {
+          "label": "Security Auditor",
+          "model": "ollama/gemma2:9b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Security Auditor. Focus on unsafe defaults, data exposure, and operational risk."
+        },
+        {
+          "label": "Performance Eng",
+          "model": "ollama/llama3.1:8b",
+          "color": "#00A76F",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on latency, memory pressure, and user-perceived responsiveness."
+        }
+      ],
+      "config": {
+        "architect": {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Focus on architecture, maintainability, and simplification."
+        },
+        "security": {
+          "label": "Security Auditor",
+          "model": "ollama/gemma2:9b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Security Auditor. Focus on unsafe defaults, data exposure, and operational risk."
+        },
+        "perf": {
+          "label": "Performance Eng",
+          "model": "ollama/llama3.1:8b",
+          "color": "#00A76F",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on latency, memory pressure, and user-perceived responsiveness."
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Synthesize the council into a decisive summary with concrete next steps."
+        }
+      }
+    },
+    {
+      "id": "code",
+      "label": "Code Review",
+      "description": "Balanced preset for reviewing code, diffs, or design docs with stronger coding models.",
+      "topic": "Review the attached code and notes. Identify correctness risks, maintainability issues, and the highest-value refactors before a public demo.",
+      "topic_placeholder": "Review the attached code and notes. Identify correctness risks, maintainability issues, and the highest-value refactors before a public demo.",
+      "deep_debate": true,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": true, "dynamic_swarm": false},
+      "sample_ids": ["code-review-request", "demo-metrics"],
+      "sample_files": ["code_review_request.md", "demo_metrics.json"],
+      "chairman_model": "ollama/qwen2.5:7b",
+      "seats": [
+        {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Focus on modularity, coupling, and technical debt."
+        },
+        {
+          "label": "Code Reviewer",
+          "model": "ollama/llama3.1:8b",
+          "color": "#C45D1A",
+          "icon": "🧩",
+          "persona": "You are the Senior Code Reviewer. Focus on bugs, weak assumptions, and code quality."
+        },
+        {
+          "label": "Performance Eng",
+          "model": "ollama/gemma2:9b",
+          "color": "#00A76F",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on inefficient workflows, context bloat, and runtime tradeoffs."
+        }
+      ],
+      "config": {
+        "architect": {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Focus on modularity, coupling, and technical debt."
+        },
+        "security": {
+          "label": "Code Reviewer",
+          "model": "ollama/llama3.1:8b",
+          "color": "#C45D1A",
+          "icon": "🧩",
+          "persona": "You are the Senior Code Reviewer. Focus on bugs, weak assumptions, and code quality."
+        },
+        "perf": {
+          "label": "Performance Eng",
+          "model": "ollama/gemma2:9b",
+          "color": "#00A76F",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on inefficient workflows, context bloat, and runtime tradeoffs."
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Combine code-review findings into a strict go/no-go summary for a demo build."
+        }
+      }
+    },
+    {
+      "id": "image",
+      "label": "Product Review",
+      "description": "Preset for product notes, mockup descriptions, or demo prep (text-based; add a vision model to enable image analysis).",
+      "topic": "Review the attached product notes and demo materials. Assess clarity, usability, and what should change before showing this to users.",
+      "topic_placeholder": "Review the attached product notes and demo materials. Assess clarity, usability, and what should change before showing this to users.",
+      "deep_debate": false,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": false, "dynamic_swarm": false},
+      "sample_ids": ["product-demo-notes"],
+      "sample_files": ["product_demo_notes.md"],
+      "chairman_model": "ollama/qwen2.5:7b",
+      "seats": [
+        {
+          "label": "UX Strategist",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🖼️",
+          "persona": "You are the UX Strategist. Focus on visual hierarchy, product clarity, and trust signals."
+        },
+        {
+          "label": "Risk Reviewer",
+          "model": "ollama/gemma2:9b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Risk Reviewer. Focus on misleading UI, unsafe user actions, and confidence gaps."
+        },
+        {
+          "label": "Demo Coach",
+          "model": "ollama/llama3.1:8b",
+          "color": "#00A76F",
+          "icon": "🎬",
+          "persona": "You are the Demo Coach. Focus on what will land in a live demo and what will confuse the audience."
+        }
+      ],
+      "config": {
+        "architect": {
+          "label": "UX Strategist",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🖼️",
+          "persona": "You are the UX Strategist. Focus on visual hierarchy, product clarity, and trust signals."
+        },
+        "security": {
+          "label": "Risk Reviewer",
+          "model": "ollama/gemma2:9b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Risk Reviewer. Focus on misleading UI, unsafe user actions, and confidence gaps."
+        },
+        "perf": {
+          "label": "Demo Coach",
+          "model": "ollama/llama3.1:8b",
+          "color": "#00A76F",
+          "icon": "🎬",
+          "persona": "You are the Demo Coach. Focus on what will land in a live demo and what will confuse the audience."
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Produce a concise verdict on whether the product is demo-ready and what to change first."
+        }
+      }
+    }
+  ],
+  "samples": [
+    {
+      "id": "architecture-brief",
+      "label": "Architecture Brief",
+      "filename": "architecture_brief.md",
+      "content_type": "text/markdown",
+      "description": "Short brief describing the local-first council product and expected review goals."
+    },
+    {
+      "id": "code-review-request",
+      "label": "Code Review Request",
+      "filename": "code_review_request.md",
+      "content_type": "text/markdown",
+      "description": "Focused request for a code review style council run."
+    },
+    {
+      "id": "demo-metrics",
+      "label": "Demo Metrics JSON",
+      "filename": "demo_metrics.json",
+      "content_type": "application/json",
+      "description": "Synthetic metrics payload for a realistic attachment demo."
+    },
+    {
+      "id": "product-demo-notes",
+      "label": "Product Demo Notes",
+      "filename": "product_demo_notes.md",
+      "content_type": "text/markdown",
+      "description": "Visual demo checklist and notes to pair with an uploaded screenshot."
+    }
+  ]
+}

@@ -3,10 +3,11 @@ import subprocess
 from typing import Iterable
 
 from hardware_detect import get_hardware_suggestion
+from provider_caps import caps_for
 
 
 def _ollama_tag(model: str) -> str:
-    if model.startswith("ollama/"):
+    if caps_for(model)[1].provider == "ollama" and "/" in model:
         return model.split("/", 1)[1]
     return model
 
@@ -15,7 +16,7 @@ def _iter_ollama_models(config: dict) -> Iterable[str]:
     seen = set()
     for seat in config.values():
         model = seat.get("model", "")
-        if model.startswith("ollama/"):
+        if caps_for(model)[1].provider == "ollama":
             tag = _ollama_tag(model)
             if tag not in seen:
                 seen.add(tag)

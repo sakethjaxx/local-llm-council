@@ -49,6 +49,13 @@ def _install_test_stubs():
 
                 return decorator
 
+            def delete(self, *args, **kwargs):
+                def decorator(func):
+                    self.routes.append(("DELETE", args, kwargs, func))
+                    return func
+
+                return decorator
+
         class UploadFile:
             def __init__(self, filename="", content_type="application/octet-stream", body=b""):
                 self.filename = filename
@@ -61,6 +68,7 @@ def _install_test_stubs():
         fastapi_stub.FastAPI = FakeFastAPI
         fastapi_stub.File = lambda default=None: default
         fastapi_stub.Form = lambda default=None: default
+        fastapi_stub.Request = object
         fastapi_stub.UploadFile = UploadFile
         sys.modules["fastapi"] = fastapi_stub
 
@@ -79,7 +87,15 @@ def _install_test_stubs():
                 self.media_type = media_type
                 self.headers = headers or {}
 
+        class Response:
+            def __init__(self, content=b"", media_type=None, headers=None, status_code=200):
+                self.body = content if isinstance(content, bytes) else str(content).encode("utf-8")
+                self.media_type = media_type
+                self.headers = headers or {}
+                self.status_code = status_code
+
         responses_module.HTMLResponse = HTMLResponse
+        responses_module.Response = Response
         responses_module.StreamingResponse = StreamingResponse
         sys.modules["fastapi.responses"] = responses_module
 
@@ -97,7 +113,9 @@ def _install_test_stubs():
 _install_test_stubs()
 os.environ["COUNCIL_METRICS_FILE"] = ""
 main = importlib.import_module("main")
+from cloud_keys import get_cloud_keys
 from metrics_store import metrics_store
+from shutdown_state import clear_shutdown_request
 
 
 class MainApiTests(unittest.IsolatedAsyncioTestCase):
@@ -105,6 +123,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         with metrics_store._lock:
             metrics_store._active_runs.clear()
             metrics_store._recent_runs.clear()
+        clear_shutdown_request()
 
     async def _read_stream(self, response):
         chunks = []
@@ -116,6 +135,8 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         body = await main.health()
 
         self.assertEqual(body["status"], "ok")
+        self.assertIn("ollama", body)
+        self.assertIn("db", body)
         self.assertIn("features", body)
         self.assertIn("python_tool_enabled", body["features"])
 
@@ -135,7 +156,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["required"], ["qwen2.5:7b"])
 
     async def test_council_stream_emits_run_started_and_done(self):
-        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None):
+        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
             yield {"type": "phase_start", "phase": 1, "label": "Independent Analysis"}
             yield {"type": "done"}
 
@@ -157,6 +178,36 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"type": "model_status"', payload)
         self.assertIn('"type": "done"', payload)
 
+    async def test_council_stream_scopes_cloud_keys_to_request(self):
+        captured = {}
+
+        class FakeRequest:
+            headers = {"x-openai-api-key": "sk-test123", "x-anthropic-api-key": "sk-ant-456"}
+
+        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
+            captured["keys"] = get_cloud_keys()
+            captured["profile"] = token_budget_profile
+            yield {"type": "done"}
+
+        ready_status = {
+            "provider": "ollama",
+            "required": ["qwen2.5:7b"],
+            "installed": ["qwen2.5:7b"],
+            "missing": [],
+            "pulled": [],
+            "ready": True,
+            "auto_pull_enabled": False,
+        }
+        with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
+             patch.object(main.CouncilOrchestrator, "run", new=fake_run):
+            response = await main.council_stream(request=FakeRequest(), topic_text="check this")
+            await self._read_stream(response)
+
+        self.assertEqual(captured["keys"]["openai"], "sk-test123")
+        self.assertEqual(captured["keys"]["anthropic"], "sk-ant-456")
+        self.assertEqual(captured["profile"], "balanced")
+        self.assertEqual(get_cloud_keys(), {})
+
     async def test_council_stream_reports_missing_models(self):
         missing_status = {
             "provider": "ollama",
@@ -176,12 +227,33 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(metrics_store._active_runs), 0)
         self.assertEqual(metrics_store._recent_runs[0]["status"], "failed")
 
+    async def test_council_stream_emits_shutdown_event(self):
+        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
+            yield {"type": "shutdown", "message": "bye"}
+
+        ready_status = {
+            "provider": "ollama",
+            "required": ["qwen2.5:7b"],
+            "installed": ["qwen2.5:7b"],
+            "missing": [],
+            "pulled": [],
+            "ready": True,
+            "auto_pull_enabled": False,
+        }
+        with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
+             patch.object(main.CouncilOrchestrator, "run", new=fake_run):
+            response = await main.council_stream(topic_text="check this")
+            payload = await self._read_stream(response)
+
+        self.assertIn('"type": "shutdown"', payload)
+
     async def test_council_stream_passes_uploaded_attachments(self):
         captured = {}
 
-        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None):
+        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
             captured["topic_text"] = topic_text
             captured["attachments"] = attachments
+            captured["profile"] = token_budget_profile
             yield {"type": "done"}
 
         ready_status = {
@@ -208,6 +280,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["attachments"][0]["kind"], "text")
         self.assertEqual(captured["attachments"][1]["kind"], "image")
         self.assertIn("data", captured["attachments"][1])
+        self.assertEqual(captured["profile"], "balanced")
 
     async def test_council_stream_falls_back_when_swarm_models_are_missing(self):
         ready_status = {
@@ -231,8 +304,9 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
 
         captured = {}
 
-        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None):
+        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
             captured["config"] = custom_config
+            captured["profile"] = token_budget_profile
             yield {"type": "done"}
 
         with patch.object(main, "ensure_models_for_config", side_effect=[ready_status, routed_missing_status, ready_status]), \
@@ -249,6 +323,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Dynamic Swarm selected models that are not installed. Falling back to the stable demo roster.', payload)
         self.assertIn("architect", captured["config"])
         self.assertEqual(captured["config"]["architect"]["label"], "Lead Architect")
+        self.assertEqual(captured["profile"], "balanced")
 
     async def test_council_stream_warns_and_falls_back_when_swarm_generation_fails(self):
         ready_status = {
@@ -262,8 +337,9 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         }
         seen = {}
 
-        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None):
+        async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
             seen["label"] = custom_config["architect"]["label"]
+            seen["profile"] = token_budget_profile
             yield {"type": "done"}
 
         with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
@@ -274,6 +350,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn('Dynamic Swarm failed. Falling back to the stable demo roster.', payload)
         self.assertEqual(seen["label"], "Lead Architect")
+        self.assertEqual(seen["profile"], "balanced")
 
     async def test_ollama_check_reports_warnings(self):
         ready_status = {
@@ -296,11 +373,11 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             body = await main.ollama_check(request)
 
         self.assertEqual(body["ready"], True)
-        self.assertEqual(body["vision_seats"], [])
+        self.assertEqual(body["image_seats"], [])
         self.assertEqual(len(body["warnings"]), 1)
 
     async def test_council_chat_emits_run_started_and_done(self):
-        async def fake_chat(self, member_id, messages, custom_config=None, run_id=None):
+        async def fake_chat(self, member_id, messages, custom_config=None, run_id=None, token_budget_profile=None):
             yield "hello"
 
         request = main.ChatRequest(
@@ -352,6 +429,59 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("presets", body)
         self.assertIn("samples", body)
         self.assertGreaterEqual(len(body["presets"]), 3)
+
+    async def test_config_presets_endpoint(self):
+        body = await main.config_presets()
+
+        self.assertIn("presets", body)
+        self.assertGreater(len(body["presets"]), 0)
+
+    async def test_run_endpoints_delegate_to_store(self):
+        with patch.object(main.run_store, "list_runs", return_value=[{"run_id": "r1"}]) as list_runs:
+            listed = await main.list_persisted_runs(limit=10)
+        self.assertEqual(listed["runs"][0]["run_id"], "r1")
+        list_runs.assert_called_once()
+
+        with patch.object(main.run_store, "get_run", return_value={"run_id": "r1"}) as get_run:
+            detail = await main.get_persisted_run("r1")
+        self.assertEqual(detail["run_id"], "r1")
+        get_run.assert_called_once_with("r1")
+
+        with patch.object(main.run_store, "delete_run", return_value=True):
+            deleted = await main.delete_persisted_run("r1")
+        self.assertEqual(deleted, {"run_id": "r1", "deleted": True})
+
+        request = main.FeedbackRequest(action_index=0, rating="up", note="useful")
+        with patch.object(main.run_store, "record_feedback") as record_feedback:
+            feedback = await main.record_run_feedback("r1", request)
+        self.assertEqual(feedback["recorded"], True)
+        record_feedback.assert_called_once_with("r1", 0, "up", "useful")
+
+    async def test_export_run_endpoint_supports_markdown_json_and_zip(self):
+        run = {
+            "run_id": "r1",
+            "status": "completed",
+            "topic": "Review this change",
+            "roster": {"chairman": {"label": "Chairman"}},
+            "phases": [
+                {"phase": 3, "member_id": "chairman", "output": '{"verdict":"ship","risk_score":2,"action_items":["test"]}'}
+            ],
+            "feedback": [],
+        }
+        metrics = {"run_id": "r1", "totals": {"prompt_tokens": 10}}
+
+        with patch.object(main.run_store, "get_run", return_value=run), \
+             patch.object(main, "_metrics_run_for_export", return_value=metrics):
+            md_response = await main.export_persisted_run("r1", format="md")
+            json_response = await main.export_persisted_run("r1", format="json")
+            zip_response = await main.export_persisted_run("r1", format="zip")
+
+        self.assertEqual(md_response.media_type, "text/markdown")
+        self.assertIn(b"# Council Run Export", md_response.body)
+        self.assertEqual(json_response.media_type, "application/json")
+        self.assertIn(b'"run_id": "r1"', json_response.body)
+        self.assertEqual(zip_response.media_type, "application/zip")
+        self.assertGreater(len(zip_response.body), 0)
 
 
 if __name__ == "__main__":

@@ -1,24 +1,16 @@
 import numpy as np
 import asyncio
 
-# Lazy load model to avoid blocking start
-embedder = None
+from embeddings import get_embedder
 
-def _get_embedder():
-    global embedder
-    if embedder is None:
-        from sentence_transformers import SentenceTransformer
-        print("\n[🧠 Smart Phase] Initializing local SentenceTransformer model...")
-        embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    return embedder
 
-async def check_unanimous_consensus(analyses: dict) -> bool:
+async def should_skip(analyses: dict) -> tuple[bool, float]:
     if len(analyses) < 2:
-        return False
+        return False, 0.0
         
     def compute_similarity():
         texts = list(analyses.values())
-        model = _get_embedder()
+        model = get_embedder()
         embeddings = model.encode(texts)
         
         # Compute pairwise cosine similarity
@@ -35,7 +27,12 @@ async def check_unanimous_consensus(analyses: dict) -> bool:
     try:
         avg_sim = await asyncio.to_thread(compute_similarity)
         print(f"\n[🧠 Smart Phase] Average Peer Agreement (Cosine Similarity): {avg_sim:.3f}")
-        return avg_sim > 0.88
+        return avg_sim > 0.88, avg_sim
     except Exception as e:
         print(f"[❌ Smart Phase Failed]: {e}")
-        return False
+        return False, 0.0
+
+
+async def check_unanimous_consensus(analyses: dict) -> bool:
+    skip, _ = await should_skip(analyses)
+    return skip

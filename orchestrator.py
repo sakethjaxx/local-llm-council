@@ -7,18 +7,28 @@ Phase 3 │ Chairman Decision     — Synthesizes everything → final call
 """
 
 import asyncio
+import json
 import os
+import re
 import time
+import contextlib
+from pathlib import Path
 from typing import AsyncIterator, Optional
 import litellm
+from budget_profiles import token_budget_for
 from hardware_detect import get_default_council_config
-from memory_graph import memory_engine
+from cloud_keys import litellm_kwargs_for_model
+from memory_store import memory_store as memory_engine
 from io_parser import format_attachments_for_prompt, parse_input
 from search_engine import get_search_context
 from metrics_store import metrics_store
-from smart_phase import check_unanimous_consensus
+from provider_caps import caps_for, supports_image_input
+from project_fingerprint import fingerprint
+from run_store import run_store
+from skill_registry import skill_registry
+from shutdown_state import is_shutdown_requested
+import smart_phase
 from summarizer import chunk_and_summarize
-import json
 from pydantic import BaseModel
 from typing import List
 
@@ -29,62 +39,87 @@ class ChairmanDecision(BaseModel):
     consensus: List[str] = []
     disputes: List[str] = []
 
+
+def _usage_to_dict(usage):
+    if usage is None:
+        return None
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump()
+    if hasattr(usage, "dict"):
+        return usage.dict()
+    if isinstance(usage, dict):
+        return usage
+    return None
+
+
+def parse_chairman_response(raw: str) -> dict:
+    def normalize(result: dict, tier: str) -> dict:
+        return {
+            "verdict": result.get("verdict", "parse_failed"),
+            "risk_score": result.get("risk_score", -1),
+            "action_items": result.get("action_items", []),
+            "consensus": result.get("consensus", ""),
+            "disputes": result.get("disputes", []),
+            "_parse_tier": result.get("_parse_tier", tier),
+        }
+
+    try:
+        return normalize(json.loads(raw), "json")
+    except Exception:
+        pass
+
+    try:
+        stripped = re.sub(r"^```(?:json)?\n?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        return normalize(json.loads(stripped), "fenced_json")
+    except Exception:
+        pass
+
+    verdict_match = re.search(r'"verdict"\s*:\s*"([^"]+)"', raw)
+    risk_match = re.search(r'"risk_score"\s*:\s*(\d+(?:\.\d+)?)', raw)
+    if verdict_match or risk_match:
+        return {
+            "verdict": verdict_match.group(1) if verdict_match else "parse_failed",
+            "risk_score": float(risk_match.group(1)) if risk_match else -1,
+            "action_items": [],
+            "consensus": "",
+            "disputes": [],
+            "_parse_tier": "regex_extracted",
+        }
+
+    return {
+        "verdict": "parse_failed",
+        "risk_score": -1,
+        "action_items": [],
+        "consensus": "",
+        "disputes": [],
+        "_parse_tier": "parse_failed",
+    }
+
 # Make litellm not spam the console
 litellm.suppress_debug_info = True
 
-SYSTEM_COUNCIL_BASE = """You are a senior council member reviewing a topic or proposal.
-Be direct, opinionated, and constructive. Structure your analysis as:
-1. STRENGTHS — what looks solid
-2. RISKS — blockers, unknowns, or major concerns
-3. RECOMMENDATIONS — concrete actions or changes
-Keep it under 300 words. Be specific, not generic.
+def _load_prompt(name: str) -> str:
+    path = Path(__file__).parent / "agent_prompts" / "phase_prompts" / name
+    return path.read_text()
 
-YOUR PERSONA:
-{persona}"""
 
-SYSTEM_REVIEWER_BASE = """You are a critical peer reviewer on a council.
-You've been given analyses from other AI models reviewing the same topic.
-Your job: identify where they agree, where they diverge, and what they MISSED based on your persona.
-Be blunt. Under 200 words.
-
-YOUR PERSONA:
-{persona}"""
-
-SYSTEM_CHAIRMAN = """You are the Chairman of this AI council.
-You've received independent analyses and peer reviews from the council members on a specific topic.
-Your job: synthesize ALL inputs and deliver a FINAL DECISION with:
-- CONSENSUS POINTS (where all members agree)
-- KEY DISPUTES (real disagreements worth noting)
-- CHAIRMAN'S VERDICT (your authoritative recommendation — be decisive)
-- TOP ACTION ITEMS (numbered, specific, assigned if possible)
-Be the tie-breaker. Under 400 words."""
+PHASE1_PROMPT = _load_prompt("phase1_analyze.txt")
+PHASE2_PROMPT = _load_prompt("phase2_review.txt")
+PHASE3_PROMPT = _load_prompt("phase3_chairman.txt")
 
 DEFAULT_MEMBER_CONFIG = get_default_council_config()
 
 class CouncilOrchestrator:
     def __init__(self, **kwargs):
-        pass
-
-    def _is_ollama_model(self, model: str) -> bool:
-        return model.startswith("ollama/")
-
-    def _supports_vision_for_model(self, model: str) -> bool:
-        normalized = model.lower()
-        vision_markers = ("llava", "vision", "gpt-4o", "claude-3", "gemini")
-        return any(marker in normalized for marker in vision_markers)
+        self._token_budget = token_budget_for(kwargs.get("token_budget_profile"))
 
     def _python_tool_enabled_for_model(self, model: str) -> bool:
         if os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "true").lower() != "true":
             return False
-        # Ollama local models are the default free path; keep them on the
-        # simpler chat-only request format unless explicitly reworked.
-        return not self._is_ollama_model(model)
-
-    def _supports_response_format(self, model: str) -> bool:
-        return not self._is_ollama_model(model)
+        return caps_for(model)[0].tool_use
 
     def _build_messages(self, model: str, system_prompt: str, user_content) -> list[dict]:
-        if self._is_ollama_model(model):
+        if caps_for(model)[1].provider == "ollama":
             if isinstance(user_content, list):
                 if any(item.get("type") == "image_url" for item in user_content):
                     return [
@@ -117,11 +152,17 @@ class CouncilOrchestrator:
         max_tokens: int,
         response_format=None,
         run_id: Optional[str] = None,
+        emit_done: bool = True,
     ) -> str:
         print(f"\n[🚀 API REQUEST Phase {phase}] -> Routing to {cfg['model']} ({cfg['label']})")
 
         full_text = ""
         max_retries = 3
+        final_usage = None
+        finish_reason = None
+        final_attempt = 1
+        final_latency_ms = None
+        success = False
 
         tools = None
         if phase == 1 and self._python_tool_enabled_for_model(cfg.get("model", "")):
@@ -145,6 +186,23 @@ class CouncilOrchestrator:
                 }
             ]
 
+        async def record_success_once():
+            if not run_id:
+                return
+            normalized_usage = _usage_to_dict(final_usage) or {}
+            await asyncio.to_thread(
+                run_store.record_phase_output,
+                run_id,
+                phase,
+                member_id,
+                full_text,
+                normalized_usage.get("prompt_tokens"),
+                normalized_usage.get("completion_tokens"),
+                final_latency_ms,
+                finish_reason,
+                final_attempt,
+            )
+
         for attempt in range(max_retries):
             started_at = time.perf_counter()
             try:
@@ -154,26 +212,31 @@ class CouncilOrchestrator:
                     max_tokens=max_tokens,
                     stream=True,
                     tools=tools,
-                    response_format=response_format
+                    response_format=response_format,
+                    **litellm_kwargs_for_model(cfg["model"]),
                 )
 
                 tool_calls = []
                 usage = None
                 async for chunk in resp:
-                    delta = chunk.choices[0].delta
+                    if is_shutdown_requested():
+                        finish_reason = "shutdown_requested"
+                        await queue.put({"type": "shutdown", "message": "Server shutdown requested. Ending stream."})
+                        break
+                    choice = chunk.choices[0]
+                    delta = choice.delta
                     text_chunk = delta.content or ""
                     if text_chunk:
                         full_text += text_chunk
                         await queue.put({"type": "member_token", "member": member_id, "chunk": text_chunk})
 
+                    chunk_finish_reason = getattr(choice, "finish_reason", None)
+                    if chunk_finish_reason is not None:
+                        finish_reason = chunk_finish_reason
+
                     chunk_usage = getattr(chunk, "usage", None)
                     if chunk_usage is not None:
-                        if hasattr(chunk_usage, "model_dump"):
-                            usage = chunk_usage.model_dump()
-                        elif hasattr(chunk_usage, "dict"):
-                            usage = chunk_usage.dict()
-                        elif isinstance(chunk_usage, dict):
-                            usage = chunk_usage
+                        usage = _usage_to_dict(chunk_usage)
 
                     if hasattr(delta, 'tool_calls') and delta.tool_calls:
                         for tc_chunk in delta.tool_calls:
@@ -182,6 +245,16 @@ class CouncilOrchestrator:
                             if tc_chunk.function.arguments:
                                 tool_calls[tc_chunk.index]["function"]["arguments"] += tc_chunk.function.arguments
 
+                response_choices = getattr(resp, "choices", None)
+                if response_choices:
+                    response_finish_reason = getattr(response_choices[0], "finish_reason", None)
+                    if response_finish_reason is not None:
+                        finish_reason = response_finish_reason
+
+                final_attempt = attempt + 1
+                final_latency_ms = int((time.perf_counter() - started_at) * 1000)
+                final_usage = usage
+                success = True
                 print(f"[✅ API RESPONSE Phase {phase}] <- {cfg['label']} completed!")
                 metrics_store.record_llm_call(
                     run_id=run_id,
@@ -189,8 +262,8 @@ class CouncilOrchestrator:
                     phase=phase,
                     model=cfg.get("model"),
                     label=cfg.get("label"),
-                    attempt=attempt + 1,
-                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                    attempt=final_attempt,
+                    duration_ms=final_latency_ms,
                     success=True,
                     usage=usage,
                     output_chars=len(full_text),
@@ -200,6 +273,7 @@ class CouncilOrchestrator:
                 # Check for Tool execution
                 if phase == 1 and tool_calls:
                     from tool_repl import execute_python
+                    followup_completed = False
                     for tc in tool_calls:
                         if tc["function"]["name"] == "execute_python":
                             try:
@@ -227,10 +301,14 @@ class CouncilOrchestrator:
                                 queue,
                                 1000,
                                 response_format=response_format,
-                                run_id=run_id,
+                                run_id=None,
+                                emit_done=False,
                             )
                             full_text += sys_msg + additional_text
-                            return full_text
+                            followup_completed = True
+                            break
+                    if followup_completed:
+                        break
                 break
             except Exception as e:
                 error_msg = str(e)
@@ -254,8 +332,11 @@ class CouncilOrchestrator:
                     final_err = f"\n[Error connecting to {cfg['label']}: {error_msg}]"
                     full_text += final_err
                     await queue.put({"type": "member_token", "member": member_id, "chunk": final_err})
-        
-        await queue.put({"type": "member_done", "member": member_id, "full_text": full_text})
+
+        if success:
+            await record_success_once()
+        if emit_done:
+            await queue.put({"type": "member_done", "member": member_id, "full_text": full_text})
         return full_text
 
     async def _member_analyze(
@@ -267,14 +348,14 @@ class CouncilOrchestrator:
         queue: asyncio.Queue,
         run_id: Optional[str] = None,
     ):
-        system_prompt = SYSTEM_COUNCIL_BASE.format(persona=cfg.get("persona", ""))
+        system_prompt = PHASE1_PROMPT.format(persona=cfg.get("persona", ""))
 
         content = []
         for attachment in attachments or []:
             if (
                 attachment.get("kind") == "image"
                 and attachment.get("data")
-                and self._supports_vision_for_model(cfg.get("model", ""))
+                and supports_image_input(cfg.get("model", ""))
             ):
                 content.append({
                     "type": "image_url",
@@ -286,7 +367,15 @@ class CouncilOrchestrator:
             content.append({"type": "text", "text": "No context provided — analyze the request based on your persona."})
 
         messages = self._build_messages(cfg.get("model", ""), system_prompt, content)
-        await self._stream_llm_to_queue(member_id, cfg, 1, messages, queue, 600, run_id=run_id)
+        await self._stream_llm_to_queue(
+            member_id,
+            cfg,
+            1,
+            messages,
+            queue,
+            self._token_budget["phase1"],
+            run_id=run_id,
+        )
 
     async def _member_review(
         self,
@@ -297,18 +386,34 @@ class CouncilOrchestrator:
         queue: asyncio.Queue,
         run_id: Optional[str] = None,
     ):
-        system_prompt = SYSTEM_REVIEWER_BASE.format(persona=cfg.get("persona", ""))
+        system_prompt = PHASE2_PROMPT.format(persona=cfg.get("persona", ""))
 
         prompt_parts = ["You are reviewing analyses from your peers:\n"]
         for peer_id, analysis in analyses.items():
             if peer_id == member_id:
                 continue
             peer_label = members_config[peer_id].get("label", peer_id)
+            context_window = caps_for(cfg.get("model", ""))[0].context_window or 4096
+            estimated_tokens = len(analysis) // 4
+            available_tokens = context_window - 600
+            if estimated_tokens > available_tokens:
+                original_len = len(analysis)
+                max_chars = max(0, available_tokens) * 4
+                analysis = analysis[:max_chars]
+                print(f"[phase2] Truncated {cfg.get('model', '')} input: {original_len} → {len(analysis)} chars")
             prompt_parts.append(f"--- {peer_label} ---\n{analysis}\n")
         
         prompt = "\n".join(prompt_parts)
         messages = self._build_messages(cfg.get("model", ""), system_prompt, prompt)
-        await self._stream_llm_to_queue(member_id, cfg, 2, messages, queue, 400, run_id=run_id)
+        await self._stream_llm_to_queue(
+            member_id,
+            cfg,
+            2,
+            messages,
+            queue,
+            self._token_budget["phase2"],
+            run_id=run_id,
+        )
 
     async def _chairman_decide(
         self,
@@ -336,7 +441,7 @@ class CouncilOrchestrator:
 
         messages = self._build_messages(
             chairman_cfg.get("model", ""),
-            SYSTEM_CHAIRMAN + "\n\nCRITICAL INSTRUCTION: You MUST follow the provided JSON schema. DO NOT wrap the output in markdown ticks.",
+            PHASE3_PROMPT + "\n\nCRITICAL INSTRUCTION: You MUST follow the provided JSON schema. DO NOT wrap the output in markdown ticks.",
             council_brief,
         )
 
@@ -347,8 +452,8 @@ class CouncilOrchestrator:
             3,
             messages,
             queue,
-            1200,
-            response_format=ChairmanDecision if self._supports_response_format(chairman_cfg.get("model", "")) else None,
+            self._token_budget["phase3"],
+            response_format=ChairmanDecision if caps_for(chairman_cfg.get("model", ""))[1].response_format else None,
             run_id=run_id,
         )
 
@@ -359,7 +464,9 @@ class CouncilOrchestrator:
         custom_config: Optional[dict] = None,
         deep_debate: bool = False,
         run_id: Optional[str] = None,
+        token_budget_profile: Optional[str] = None,
     ) -> AsyncIterator[dict]:
+        self._token_budget = token_budget_for(token_budget_profile)
         config = custom_config if custom_config else DEFAULT_MEMBER_CONFIG
         council_members = [k for k in config.keys() if k != "chairman"]
         chairman_cfg = config.get("chairman", DEFAULT_MEMBER_CONFIG["chairman"])
@@ -371,6 +478,15 @@ class CouncilOrchestrator:
                 "attachment_count": len(attachments or []),
             },
         )
+        project_fp = await asyncio.to_thread(fingerprint, ".")
+        await asyncio.to_thread(
+            run_store.begin_run,
+            run_id,
+            topic_text,
+            config,
+            deep_debate,
+            project_fp["hash"],
+        )
 
         try:
             attachment_context = format_attachments_for_prompt(attachments or [])
@@ -380,7 +496,10 @@ class CouncilOrchestrator:
 
             scraped_topic = await parse_input(combined_topic)
             past_context = await memory_engine.get_context(scraped_topic, chairman_cfg["model"])
-            full_topic = await chunk_and_summarize(past_context + scraped_topic, chairman_cfg["model"])
+            skills = await skill_registry.get_skills_for_topic(scraped_topic, top_k=3)
+            skills_block = skill_registry.format_skills_block(skills)
+            topic_context = await chunk_and_summarize(scraped_topic, chairman_cfg["model"])
+            full_topic = f"{past_context}{skills_block}{topic_context}"
 
             yield {"type": "phase_start", "phase": 1, "label": "Independent Analysis"}
             for member in council_members:
@@ -408,15 +527,18 @@ class CouncilOrchestrator:
                 yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (Bypassed - Fast Mode)"}
                 for member in council_members:
                     reviews[member] = "SKIPPED - Fast Code Review mode enabled. Bypassing debate for latency."
+                    await asyncio.to_thread(run_store.record_phase_output, run_id, 2, member, reviews[member])
                     yield {"type": "member_done", "member": member, "full_text": reviews[member]}
                 await asyncio.sleep(0.5)
             else:
-                is_unanimous = await check_unanimous_consensus(analyses)
+                is_unanimous, smart_score = await smart_phase.should_skip(analyses)
+                await asyncio.to_thread(run_store.update_smart_phase_score, run_id, smart_score)
 
                 if is_unanimous:
                     yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (SKIPPED - Unanimous Consensus!)"}
                     for member in council_members:
                         reviews[member] = "SKIPPED - The council was in unanimous agreement during Phase 1. No factual disputes detected."
+                        await asyncio.to_thread(run_store.record_phase_output, run_id, 2, member, reviews[member])
                         yield {"type": "member_done", "member": member, "full_text": reviews[member]}
                     await asyncio.sleep(1)
                 else:
@@ -457,11 +579,40 @@ class CouncilOrchestrator:
                 else:
                     yield event
 
-            asyncio.create_task(memory_engine.extract_memory(combined_topic, chairman_decision_text, chairman_cfg["model"]))
+            chairman_result = parse_chairman_response(chairman_decision_text)
+            await asyncio.to_thread(
+                run_store.record_phase_output,
+                run_id,
+                3,
+                "chairman",
+                chairman_decision_text,
+                None,
+                None,
+                None,
+                finish_reason=chairman_result.get("_parse_tier"),
+                attempt_number=None,
+            )
+            task = asyncio.create_task(
+                memory_engine.extract_memory(
+                    combined_topic,
+                    chairman_decision_text,
+                    chairman_cfg["model"],
+                    run_id=run_id,
+                )
+            )
+            with contextlib.suppress(Exception):
+                task.add_done_callback(lambda t: t.exception())
             metrics_store.finish_run(run_id, status="completed")
+            await asyncio.to_thread(run_store.finish_run, run_id, "completed")
+            task = asyncio.create_task(
+                skill_registry.extract_skills(run_id, combined_topic, chairman_cfg["model"])
+            )
+            with contextlib.suppress(Exception):
+                task.add_done_callback(lambda t: t.exception())
             yield {"type": "done"}
         except Exception as exc:
             metrics_store.finish_run(run_id, status="failed", error=str(exc))
+            await asyncio.to_thread(run_store.finish_run, run_id, "failed", str(exc))
             raise
 
     async def chat_with_member(
@@ -470,13 +621,15 @@ class CouncilOrchestrator:
         messages: list,
         custom_config: Optional[dict] = None,
         run_id: Optional[str] = None,
+        token_budget_profile: Optional[str] = None,
     ) -> AsyncIterator[str]:
+        self._token_budget = token_budget_for(token_budget_profile)
         config = custom_config if custom_config else DEFAULT_MEMBER_CONFIG
         cfg = config.get(member_id, DEFAULT_MEMBER_CONFIG.get(member_id, DEFAULT_MEMBER_CONFIG["chairman"]))
         run_id = run_id or metrics_store.start_run("chat", {"member_id": member_id})
         system_prompt = f"You are a council member engaged in a direct chat. Stay completely in character. YOUR PERSONA: {cfg.get('persona', '')}"
 
-        if self._is_ollama_model(cfg.get("model", "")):
+        if caps_for(cfg.get("model", ""))[1].provider == "ollama":
             merged = []
             for m in messages:
                 merged.append(f"{m.role.upper()}:\n{m.content}")
@@ -493,8 +646,9 @@ class CouncilOrchestrator:
             resp = await litellm.acompletion(
                 model=cfg["model"],
                 messages=formatted_messages,
-                max_tokens=600,
-                stream=True
+                max_tokens=self._token_budget["chat"],
+                stream=True,
+                **litellm_kwargs_for_model(cfg["model"]),
             )
             output_chars = 0
             async for chunk in resp:

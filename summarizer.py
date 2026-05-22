@@ -1,5 +1,6 @@
 import litellm
 import asyncio
+from cloud_keys import litellm_kwargs_for_model
 
 async def chunk_and_summarize(text: str, base_model: str) -> str:
     if len(text) < 15000:
@@ -29,7 +30,8 @@ async def chunk_and_summarize(text: str, base_model: str) -> str:
         try:
             resp = await litellm.acompletion(
                 model=base_model,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
+                **litellm_kwargs_for_model(base_model),
             )
             return f"--- Segment {idx+1} Summary ---\n{resp.choices[0].message.content}\n"
         except Exception:

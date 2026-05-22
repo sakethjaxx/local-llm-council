@@ -1,3 +1,4 @@
+# DEPRECATED: retained for backward compatibility; new code should use memory_store.SQLiteMemory.
 import networkx as nx
 import json
 import os

@@ -317,6 +317,25 @@
       line-height: 1.5;
       margin-top: 4px;
     }
+    .cloud-key-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .cloud-key-row {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    .cloud-key-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
 
     .council-panel {
       padding: 34px;
@@ -466,6 +485,75 @@
       font-family: 'IBM Plex Sans', sans-serif; color: var(--text); font-weight: 600;
     }
     #memoryNetwork { flex: 1; background: #f8f5ef; }
+    .replay-layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 0;
+      flex: 1;
+      min-height: 0;
+    }
+    .replay-sidebar {
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      overflow-y: auto;
+      background: rgba(255, 255, 255, 0.52);
+    }
+    .replay-detail {
+      padding: 18px;
+      overflow-y: auto;
+    }
+    .replay-run-item {
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.7);
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+    .replay-run-item:hover {
+      border-color: var(--border-strong);
+      background: rgba(255, 255, 255, 0.92);
+    }
+    .replay-run-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .replay-run-meta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      line-height: 1.5;
+    }
+    .replay-phase {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      margin-top: 14px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .replay-phase-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .replay-member {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .replay-phase-meta {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    .replay-empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
 
     @media (max-width: 980px) {
       header {
@@ -488,6 +576,13 @@
         align-items: flex-start;
         flex-direction: column;
       }
+      .replay-layout {
+        grid-template-columns: 1fr;
+      }
+      .replay-sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
     }
 
   </style>
@@ -504,6 +599,7 @@
       <p>Local multi-model analysis with memory, metrics, and hardware-aware routing.</p>
     </div>
     <div class="header-actions">
+      <button class="btn btn-small" onclick="openReplayModal()">Replay runs</button>
       <button class="btn btn-small" onclick="viewCodeGraph()">View code graph</button>
       <button class="btn btn-small" onclick="viewMemory()">View memory graph</button>
     </div>
@@ -548,6 +644,42 @@
       </div>
 
       <div>
+        <div class="section-title">2.7 Token Budget</div>
+        <div class="inline-actions">
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('economy')">Economy</button>
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('balanced')">Balanced</button>
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('performance')">Performance</button>
+        </div>
+        <div class="helper-copy" id="tokenBudgetSummary">Balanced profile: standard council token caps.</div>
+      </div>
+
+      <div>
+        <div class="section-title">
+          2.6 Cloud Keys
+          <button class="btn btn-small" onclick="clearCloudKeys()">Clear keys</button>
+        </div>
+        <div class="cloud-key-grid">
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">OpenAI</div>
+            <input type="password" id="keyOpenAI" placeholder="sk-..." oninput="persistCloudKeys()">
+          </div>
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">Anthropic</div>
+            <input type="password" id="keyAnthropic" placeholder="sk-ant-..." oninput="persistCloudKeys()">
+          </div>
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">Gemini</div>
+            <input type="password" id="keyGemini" placeholder="AIza..." oninput="persistCloudKeys()">
+          </div>
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">Groq</div>
+            <input type="password" id="keyGroq" placeholder="gsk_..." oninput="persistCloudKeys()">
+          </div>
+        </div>
+        <div class="helper-copy">Stored in this browser only. Keys are sent as request headers and are not written to server-side disk state.</div>
+      </div>
+
+      <div>
         <div class="section-title">
           3. Council Roster 
           <div>
@@ -570,6 +702,18 @@
         Run council
       </button>
 
+      <div style="margin-top: 12px;">
+        <button class="btn btn-small" onclick="toggleProjectReview()" id="projectReviewToggle">📁 Review Local Project</button>
+        <div id="projectReviewSection" style="display:none; margin-top: 10px; padding: 14px; background: rgba(255,255,255,0.5); border: 1px solid var(--border); border-radius: 12px;">
+          <div class="helper-copy" style="margin-bottom: 8px;">Enter the absolute path to a local project directory. The council will scan its files, pick the most connected ones, and run a full review.</div>
+          <div style="display:flex; gap: 8px; align-items:center;">
+            <input type="text" id="projectPathInput" placeholder="/Users/you/projects/my-app" style="flex:1; padding: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); outline: none;">
+            <button class="btn btn-solid" id="projectReviewBtn" onclick="launchProjectReview()" style="white-space:nowrap;">Scan &amp; Review</button>
+          </div>
+          <div id="projectScanInfo" style="margin-top: 8px; font-size: 12px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
+        </div>
+      </div>
+
     </aside>
 
     <!-- RIGHT PANEL: OUTPUT -->
@@ -590,6 +734,23 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="replayModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>Run replay</span>
+        <button class="btn btn-small" onclick="closeReplayModal()">X</button>
+      </div>
+      <div class="replay-layout">
+        <div class="replay-sidebar" id="replayRunList">
+          <div class="replay-empty">Loading past runs...</div>
+        </div>
+        <div class="replay-detail" id="replayRunDetail">
+          <div class="replay-empty">Select a run to inspect its phases.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     // ── STATE ──
     let councilConfig = {
@@ -606,6 +767,13 @@
     let selectedFiles = [];
     let demoCatalog = null;
     let preflightState = null;
+    const CLOUD_KEY_STORAGE_KEY = 'llmCouncilCloudKeys';
+    let tokenBudgetProfile = 'balanced';
+    const TOKEN_BUDGET_SUMMARIES = {
+      economy: 'Economy profile: shorter answers for lower latency on smaller local models.',
+      balanced: 'Balanced profile: standard council token caps.',
+      performance: 'Performance profile: longer answers with higher latency and memory cost.'
+    };
 
     const MODEL_PROFILES = {
       turbo: {
@@ -637,9 +805,84 @@
         .replaceAll("'", '&#39;');
     }
 
+    function loadCloudKeys() {
+      try {
+        return JSON.parse(localStorage.getItem(CLOUD_KEY_STORAGE_KEY) || '{}');
+      } catch (e) {
+        console.error('Failed to parse stored cloud keys', e);
+        return {};
+      }
+    }
+
+    function persistCloudKeys() {
+      const keys = {
+        openai: document.getElementById('keyOpenAI')?.value.trim() || '',
+        anthropic: document.getElementById('keyAnthropic')?.value.trim() || '',
+        gemini: document.getElementById('keyGemini')?.value.trim() || '',
+        groq: document.getElementById('keyGroq')?.value.trim() || ''
+      };
+      localStorage.setItem(CLOUD_KEY_STORAGE_KEY, JSON.stringify(keys));
+    }
+
+    function hydrateCloudKeys() {
+      const keys = loadCloudKeys();
+      document.getElementById('keyOpenAI').value = keys.openai || '';
+      document.getElementById('keyAnthropic').value = keys.anthropic || '';
+      document.getElementById('keyGemini').value = keys.gemini || '';
+      document.getElementById('keyGroq').value = keys.groq || '';
+    }
+
+    function clearCloudKeys() {
+      localStorage.removeItem(CLOUD_KEY_STORAGE_KEY);
+      hydrateCloudKeys();
+    }
+
+    function setTokenBudgetProfile(profile) {
+      tokenBudgetProfile = ['economy', 'balanced', 'performance'].includes(profile) ? profile : 'balanced';
+      const summary = document.getElementById('tokenBudgetSummary');
+      if (summary) {
+        summary.textContent = TOKEN_BUDGET_SUMMARIES[tokenBudgetProfile];
+      }
+    }
+
+    function cloudKeyHeaders() {
+      const keys = loadCloudKeys();
+      const headers = {};
+      if (keys.openai) headers['X-OpenAI-API-Key'] = keys.openai;
+      if (keys.anthropic) headers['X-Anthropic-API-Key'] = keys.anthropic;
+      if (keys.gemini) headers['X-Gemini-API-Key'] = keys.gemini;
+      if (keys.groq) headers['X-Groq-API-Key'] = keys.groq;
+      return headers;
+    }
+
     function syncToggles(preset) {
-      document.getElementById('deepDebateToggle').checked = Boolean(preset.deep_debate);
-      document.getElementById('dynamicSwarmToggle').checked = Boolean(preset.dynamic_swarm);
+      const toggles = preset.toggles || {};
+      document.getElementById('deepDebateToggle').checked = Boolean(toggles.deep_debate ?? preset.deep_debate);
+      document.getElementById('dynamicSwarmToggle').checked = Boolean(toggles.dynamic_swarm ?? preset.dynamic_swarm);
+    }
+
+    function configFromPreset(preset) {
+      if (preset.config) return JSON.parse(JSON.stringify(preset.config));
+      const seats = preset.seats || [];
+      const keys = ['architect', 'security', 'perf'];
+      const config = {};
+      seats.slice(0, 3).forEach((seat, index) => {
+        config[keys[index]] = {
+          label: seat.label || `Seat ${index + 1}`,
+          model: seat.model,
+          color: seat.color || ['#4D6BFE', '#FF4444', '#00A76F'][index],
+          icon: seat.icon || ['◆', '◇', '○'][index],
+          persona: seat.persona || ''
+        };
+      });
+      config.chairman = {
+        label: 'Chairman',
+        model: preset.chairman_model || 'ollama/qwen2.5:7b',
+        color: '#F5C842',
+        icon: '👑',
+        persona: preset.chairman_persona || 'You are the Chairman. Synthesize the council into a decisive summary with concrete next steps.'
+      };
+      return config;
     }
 
     function renderPresets() {
@@ -667,14 +910,14 @@
         box.innerHTML = '';
         return;
       }
-      box.innerHTML = demoCatalog.samples.map(sample => `
+      box.innerHTML = (demoCatalog.samples || []).map(sample => `
         <button class="btn btn-small" onclick="attachSample('${sample.id}')">${escapeHtml(sample.label)}</button>
       `).join('');
     }
 
     async function fetchDemoCatalog() {
       try {
-        const resp = await fetch('/demo/catalog');
+        const resp = await fetch('/config/presets');
         demoCatalog = await resp.json();
         renderPresets();
         renderSampleActions();
@@ -685,7 +928,7 @@
 
     async function attachSample(sampleId) {
       if (!demoCatalog) return;
-      const sample = demoCatalog.samples.find(item => item.id === sampleId);
+      const sample = (demoCatalog.samples || []).find(item => item.id === sampleId);
       if (!sample) return;
 
       const resp = await fetch(`/demo-samples/${sample.filename}`);
@@ -701,7 +944,10 @@
       const preset = demoCatalog.presets.find(item => item.id === presetId);
       if (!preset) return;
       selectedFiles = [];
-      for (const sampleId of preset.sample_ids || []) {
+      const sampleIds = preset.sample_ids || (preset.sample_files || [])
+        .map(filename => (demoCatalog.samples || []).find(sample => sample.filename === filename)?.id)
+        .filter(Boolean);
+      for (const sampleId of sampleIds) {
         await attachSample(sampleId);
       }
       renderSelectedFiles();
@@ -713,8 +959,8 @@
       const preset = demoCatalog.presets.find(item => item.id === presetId);
       if (!preset) return;
 
-      councilConfig = JSON.parse(JSON.stringify(preset.config));
-      document.getElementById('topicText').value = preset.topic || '';
+      councilConfig = configFromPreset(preset);
+      document.getElementById('topicText').value = preset.topic || preset.topic_placeholder || '';
       syncToggles(preset);
       renderSeats();
       refreshPreflight();
@@ -740,15 +986,15 @@
         const missingHtml = (preflightState.missing || []).length
           ? `<div class="status-line status-bad">Missing models: ${escapeHtml(preflightState.missing.join(', '))}</div>`
           : `<div class="status-line status-good">All required local models are installed.</div>`;
-        const visionHtml = selectedFiles.some(file => file.type.startsWith('image/'))
-          ? `<div class="status-line ${preflightState.vision_seats.length ? 'status-good' : 'status-warn'}">Vision seats: ${escapeHtml((preflightState.vision_seats || []).join(', ') || 'none')}</div>`
+        const imageHtml = selectedFiles.some(file => file.type.startsWith('image/'))
+          ? `<div class="status-line ${preflightState.image_seats.length ? 'status-good' : 'status-warn'}">Image seats: ${escapeHtml((preflightState.image_seats || []).join(', ') || 'none')}</div>`
           : '';
 
         box.innerHTML = `
           <div class="preset-title ${statusClass}">${preflightState.ready ? 'Demo roster ready' : 'Demo roster blocked'}</div>
           <div class="status-line">Installed local models: ${escapeHtml((preflightState.installed || []).join(', ') || 'none detected')}</div>
           ${missingHtml}
-          ${visionHtml}
+          ${imageHtml}
           ${warningHtml || '<div class="status-line">No demo warnings for the current setup.</div>'}
         `;
       } catch (e) {
@@ -869,6 +1115,8 @@
     }
 
     renderSeats();
+    hydrateCloudKeys();
+    setTokenBudgetProfile('balanced');
     fetchDemoCatalog();
     loadHardwareDefaults();
     document.getElementById('attachmentInput').addEventListener('change', (event) => {
@@ -885,8 +1133,8 @@
       if (!preflightState || !preflightState.ready) {
         return alert('Demo preflight failed. Install the missing models or switch to a preset that matches your local setup.');
       }
-      if ((preflightState.warnings || []).some(item => item.includes('no seat is using a known vision-capable local model'))) {
-        return alert('You selected image attachments without a vision-capable seat. Switch to the Vision Review preset or change one model before launching.');
+      if ((preflightState.warnings || []).some(item => item.includes('no seat is using a known image-capable local model'))) {
+        return alert('You selected image attachments without an image-capable seat. Switch to the Image Review preset or change one model before launching.');
       }
 
       const btn = document.getElementById('launchBtn');
@@ -902,6 +1150,7 @@
       const formData = new FormData();
       formData.append('topic_text', topic);
       formData.append('council_config', JSON.stringify(councilConfig));
+      formData.append('token_budget_profile', tokenBudgetProfile);
       for (const file of selectedFiles) {
         formData.append('attachments', file);
       }
@@ -917,7 +1166,11 @@
       }
 
       try {
-        const resp = await fetch('/council/stream', { method: 'POST', body: formData });
+        const resp = await fetch('/council/stream', {
+          method: 'POST',
+          headers: cloudKeyHeaders(),
+          body: formData
+        });
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -940,6 +1193,79 @@
       
       btn.disabled = false;
       btn.innerHTML = 'INITIALIZE COUNCIL';
+    }
+
+    function toggleProjectReview() {
+      const section = document.getElementById('projectReviewSection');
+      section.style.display = section.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function launchProjectReview() {
+      const path = document.getElementById('projectPathInput').value.trim();
+      if (!path) return alert('Enter a project directory path.');
+
+      const btn = document.getElementById('projectReviewBtn');
+      const launchBtn = document.getElementById('launchBtn');
+      const panel = document.getElementById('councilPanel');
+      const infoDiv = document.getElementById('projectScanInfo');
+
+      btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      launchBtn.disabled = true;
+      panel.innerHTML = '';
+      rawCardContents = {};
+      thinkingCards = {};
+      chatHistory = [];
+      infoDiv.textContent = '';
+
+      try {
+        const resp = await fetch('/council/review-project', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...cloudKeyHeaders() },
+          body: JSON.stringify({
+            path,
+            deep_debate: document.getElementById('deepDebateToggle')?.checked || false,
+            council_config: councilConfig,
+            token_budget_profile: tokenBudgetProfile,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          panel.innerHTML = `<div style="color:var(--danger)">Error: ${escapeHtml(err.detail || 'Unknown error')}</div>`;
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'project_info') {
+                  infoDiv.textContent = `Scanning ${ev.total_files} files → reviewing ${ev.files_selected.length} core files`;
+                } else {
+                  handleEvent(ev, panel);
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch (err) {
+        panel.innerHTML += `<div style="color:var(--danger)">Error: ${err.message}</div>`;
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Scan & Review';
+      launchBtn.disabled = false;
     }
 
     function handleEvent(ev, panel) {
@@ -1110,11 +1436,12 @@
       try {
         const resp = await fetch('/council/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...cloudKeyHeaders() },
           body: JSON.stringify({
             member_id: targetId,
             messages: chatHistory,
-            council_config: councilConfig
+            council_config: councilConfig,
+            token_budget_profile: tokenBudgetProfile
           })
         });
 
@@ -1176,6 +1503,120 @@
       a.href = url;
       a.download = `council_report_${Date.now()}.md`;
       a.click();
+    }
+
+    async function openReplayModal() {
+      const modal = document.getElementById('replayModal');
+      modal.style.display = 'flex';
+      await loadReplayRuns();
+    }
+
+    function closeReplayModal() {
+      document.getElementById('replayModal').style.display = 'none';
+    }
+
+    async function loadReplayRuns() {
+      const list = document.getElementById('replayRunList');
+      const detail = document.getElementById('replayRunDetail');
+      list.innerHTML = '<div class="replay-empty">Loading past runs...</div>';
+      detail.innerHTML = '<div class="replay-empty">Select a run to inspect its phases.</div>';
+
+      try {
+        const resp = await fetch('/runs?limit=25');
+        const data = await resp.json();
+        const runs = data.runs || [];
+        if (!runs.length) {
+          list.innerHTML = '<div class="replay-empty">No persisted runs yet.</div>';
+          return;
+        }
+
+        list.innerHTML = runs.map(run => {
+          const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
+          const topic = escapeHtml((run.topic || '').slice(0, 72) || 'Untitled run');
+          return `
+            <div class="replay-run-item" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
+              <div class="replay-run-title">${topic}</div>
+              <div class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</div>
+            </div>
+          `;
+        }).join('');
+
+        await loadReplayRunDetail(runs[0].run_id);
+      } catch (e) {
+        console.error('Failed to load replay runs', e);
+        list.innerHTML = '<div class="replay-empty">Failed to load persisted runs.</div>';
+      }
+    }
+
+    function formatReplayPhaseOutput(phase) {
+      if (phase.phase === 3 && phase.member_id === 'chairman') {
+        try {
+          const data = JSON.parse(phase.output || '{}');
+          return `
+            <h3>Verdict: ${escapeHtml(data.verdict || 'unknown')}</h3>
+            <p><strong>Risk score:</strong> ${escapeHtml(String(data.risk_score ?? 'n/a'))}</p>
+            <p><strong>Action items:</strong></p>
+            <ul>${(data.action_items || []).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+          `;
+        } catch (e) {
+          return marked.parse(phase.output || '');
+        }
+      }
+      return marked.parse(phase.output || '');
+    }
+
+    async function loadReplayRunDetail(runId) {
+      const detail = document.getElementById('replayRunDetail');
+      detail.innerHTML = '<div class="replay-empty">Loading run detail...</div>';
+
+      try {
+        const resp = await fetch(`/runs/${encodeURIComponent(runId)}`);
+        const run = await resp.json();
+        if (!run || !run.run_id) {
+          detail.innerHTML = '<div class="replay-empty">Run not found.</div>';
+          return;
+        }
+
+        const roster = run.roster || {};
+        const phases = run.phases || [];
+        const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
+        const finished = run.finished_at ? new Date(run.finished_at * 1000).toLocaleString() : 'in progress';
+        const chairmanPhase = phases.find(phase => phase.phase === 3 && phase.member_id === 'chairman');
+        let verdictSummary = '';
+        if (chairmanPhase) {
+          try {
+            const chairmanJson = JSON.parse(chairmanPhase.output || '{}');
+            verdictSummary = `<div class="status-card"><div class="preset-title">Chairman verdict</div><div class="status-line">${escapeHtml(chairmanJson.verdict || 'Unavailable')}</div></div>`;
+          } catch (e) {
+            verdictSummary = '';
+          }
+        }
+
+        detail.innerHTML = `
+          <div class="preset-title">${escapeHtml(run.topic || 'Untitled run')}</div>
+          <div class="replay-run-meta" style="margin-top:8px;">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}<br>finished: ${escapeHtml(finished)}</div>
+          ${verdictSummary}
+          ${phases.map(phase => {
+            const seat = roster[phase.member_id] || {};
+            const label = seat.label || phase.member_id;
+            const color = seat.color || 'var(--accent)';
+            const icon = seat.icon || '•';
+            return `
+              <div class="replay-phase">
+                <div class="replay-phase-head">
+                  <div class="replay-member" style="color:${escapeHtml(color)}">${escapeHtml(icon)} ${escapeHtml(label)}</div>
+                  <div class="replay-phase-meta">phase ${escapeHtml(String(phase.phase))} • ${escapeHtml(phase.member_id)}</div>
+                </div>
+                <div class="replay-phase-meta">finish_reason: ${escapeHtml(String(phase.finish_reason || 'n/a'))} • attempt: ${escapeHtml(String(phase.attempt_number || 1))}</div>
+                <div class="card-body" style="display:block; margin-top:10px;">${formatReplayPhaseOutput(phase)}</div>
+              </div>
+            `;
+          }).join('') || '<div class="replay-empty">No phase outputs stored for this run.</div>'}
+        `;
+      } catch (e) {
+        console.error('Failed to load replay detail', e);
+        detail.innerHTML = '<div class="replay-empty">Failed to load run detail.</div>';
+      }
     }
 
     // ── MEMORY GRAPH VISUALIZATION ──

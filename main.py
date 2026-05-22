@@ -6,27 +6,70 @@ FastAPI backend with SSE streaming for real-time council progress
 import asyncio
 import base64
 import copy
+import io
 import json
 import os
+import pathlib
+import signal
+import zipfile
+import warnings
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from demo_catalog import get_demo_catalog
+from demo_catalog import get_demo_catalog, load_presets
+from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES, normalize_token_budget_profile
+from cloud_keys import extract_cloud_keys, scoped_cloud_keys
 from hardware_detect import get_default_council_config, get_hardware_suggestion
 from io_parser import parse_uploaded_file
+from memory_store import memory_store
 from metrics_store import metrics_store
 from ollama_manager import auto_pull_enabled, ensure_models_for_config
 from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG
+from provider_caps import redact_config, supports_image_input
 from project_graph import get_project_code_graph
+from run_store import DB_PATH as RUN_DB_PATH, run_store
+from shutdown_state import clear_shutdown_request, is_shutdown_requested, request_shutdown, track_active_stream, wait_for_active_streams
+from skill_registry import skill_registry
 
 load_dotenv()
 
-app = FastAPI(title="LLM Council", version="1.0.0")
+_host = os.environ.get("COUNCIL_HOST", "127.0.0.1")
+_api_key = os.environ.get("COUNCIL_API_KEY", "")
+if _host not in ("127.0.0.1", "localhost") and not _api_key:
+    warnings.warn(
+        "WARNING: Council server binding to a non-localhost address with no "
+        "COUNCIL_API_KEY set. All endpoints are unauthenticated.",
+        stacklevel=2,
+    )
+
+
+def _handle_sigterm(signum, frame):
+    del signum, frame
+    request_shutdown()
+
+
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+except (ValueError, AttributeError):
+    pass
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    del app
+    clear_shutdown_request()
+    asyncio.create_task(asyncio.to_thread(memory_store.rebuild_embeddings))
+    yield
+    if is_shutdown_requested():
+        await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
+
+
+app = FastAPI(title="LLM Council", version="1.0.0", lifespan=lifespan)
 
 
 def _allowed_origins() -> list[str]:
@@ -46,12 +89,84 @@ def _feature_flags() -> dict:
         "default_provider": "ollama",
         "default_mode": "free-local-open-weights",
         "auto_pull_local_models": auto_pull_enabled(),
+        "token_budget_profiles": list(TOKEN_BUDGET_PROFILES.keys()),
+        "default_token_budget_profile": DEFAULT_TOKEN_BUDGET_PROFILE,
     }
 
 
-def _vision_capable(model: str) -> bool:
-    normalized = (model or "").lower()
-    return any(marker in normalized for marker in ("llava", "vision", "gemma3", "qwen2.5vl", "qwen3-vl", "minicpm-v", "moondream"))
+def _request_cloud_keys(request: Request | None) -> dict[str, str]:
+    if request is None:
+        return {}
+    return extract_cloud_keys(getattr(request, "headers", {}) or {})
+
+
+def _shutdown_event_payload() -> dict:
+    return {"type": "shutdown", "message": "Server shutdown requested. Active stream is closing."}
+
+
+def _metrics_run_for_export(run_id: str) -> dict:
+    for run in metrics_store.list_runs(limit=500):
+        if run.get("run_id") == run_id:
+            return redact_config(run)
+    return {}
+
+
+def _render_run_markdown(run: dict, metrics: dict) -> str:
+    lines = [
+        "# Council Run Export",
+        "",
+        f"Run ID: {run.get('run_id', '')}",
+        f"Status: {run.get('status', '')}",
+        "",
+        "## Topic",
+        run.get("topic", ""),
+        "",
+    ]
+
+    chairman_phase = next(
+        (
+            phase
+            for phase in run.get("phases", [])
+            if phase.get("phase") == 3 and phase.get("member_id") == "chairman"
+        ),
+        None,
+    )
+    if chairman_phase:
+        lines.extend([
+            "## Chairman Verdict",
+            chairman_phase.get("output", ""),
+            "",
+        ])
+
+    for phase in run.get("phases", []):
+        seat = (run.get("roster") or {}).get(phase.get("member_id"), {})
+        label = seat.get("label") or phase.get("member_id", "unknown")
+        lines.extend([
+            f"## Phase {phase.get('phase')} — {label}",
+            "",
+            phase.get("output", ""),
+            "",
+        ])
+
+    if run.get("feedback"):
+        lines.append("## Feedback")
+        lines.append("")
+        for item in run["feedback"]:
+            lines.append(
+                f"- Action {item.get('action_index')}: {item.get('rating')} {item.get('note', '').strip()}".rstrip()
+            )
+        lines.append("")
+
+    if metrics:
+        lines.extend([
+            "## Metrics",
+            "",
+            json.dumps(metrics, indent=2),
+            "",
+        ])
+
+    return "\n".join(lines)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,8 +187,10 @@ async def root():
 
 @app.post("/council/stream")
 async def council_stream(
+    request: Request | None = None,
     topic_text: str = Form(""),
     council_config: str = Form(None),
+    token_budget_profile: str = Form(DEFAULT_TOKEN_BUDGET_PROFILE),
     dynamic_swarm: bool = Form(False),
     deep_debate: bool = Form(False),
     attachments: Optional[list[UploadFile]] = File(None),
@@ -99,53 +216,71 @@ async def council_stream(
             pass
 
     async def event_generator():
-        cfg = copy.deepcopy(config_dict or get_default_council_config())
-        run_id = metrics_store.start_run(
-            "council",
-            {
-                "deep_debate": deep_debate,
-                "dynamic_swarm": dynamic_swarm,
-                "attachment_count": len(parsed_attachments),
-            },
-        )
-        model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
-        yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
-        yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
-        if not model_status["ready"]:
-            metrics_store.finish_run(
-                run_id,
-                status="failed",
-                error="Missing Ollama models: " + ", ".join(model_status["missing"]),
+        with track_active_stream():
+            request_cloud_keys = _request_cloud_keys(request)
+            resolved_budget_profile = normalize_token_budget_profile(token_budget_profile)
+            cfg = copy.deepcopy(config_dict or get_default_council_config())
+            run_id = metrics_store.start_run(
+                "council",
+                {
+                    "deep_debate": deep_debate,
+                    "dynamic_swarm": dynamic_swarm,
+                    "attachment_count": len(parsed_attachments),
+                    "token_budget_profile": resolved_budget_profile,
+                },
             )
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Missing Ollama models: ' + ', '.join(model_status['missing'])})}\n\n"
-            return
-        if dynamic_swarm:
-            from router_agent import generate_swarm
-            yield f"data: {json.dumps({'type': 'phase_start', 'phase': 0, 'label': 'Dynamic Swarm Routing'})}\n\n"
-            base_model = cfg.get("chairman", {}).get("model", "ollama/qwen2.5:7b")
-            new_roster = await generate_swarm(topic_text, base_model)
-            if new_roster:
-                new_roster["chairman"] = cfg.get("chairman")
-                cfg = new_roster
+            with scoped_cloud_keys(request_cloud_keys):
+                if is_shutdown_requested():
+                    yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                    return
                 model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
-                yield f"data: {json.dumps({'type': 'swarm_routed', 'config': cfg})}\n\n"
+                yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
-                    cfg = copy.deepcopy(config_dict or get_default_council_config())
-                    model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
-                    yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm selected models that are not installed. Falling back to the stable demo roster.'})}\n\n"
-                    yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm failed. Falling back to the stable demo roster.'})}\n\n"
+                    metrics_store.finish_run(
+                        run_id,
+                        status="failed",
+                        error="Missing Ollama models: " + ", ".join(model_status["missing"]),
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Missing Ollama models: ' + ', '.join(model_status['missing'])})}\n\n"
+                    return
+                if dynamic_swarm:
+                    from router_agent import generate_swarm
+                    yield f"data: {json.dumps({'type': 'phase_start', 'phase': 0, 'label': 'Dynamic Swarm Routing'})}\n\n"
+                    base_model = cfg.get("chairman", {}).get("model", "ollama/qwen2.5:7b")
+                    new_roster = await generate_swarm(topic_text, base_model)
+                    if new_roster:
+                        new_roster["chairman"] = cfg.get("chairman")
+                        cfg = new_roster
+                        model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                        yield f"data: {json.dumps({'type': 'swarm_routed', 'config': redact_config(cfg)})}\n\n"
+                        yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
+                        if not model_status["ready"]:
+                            cfg = copy.deepcopy(config_dict or get_default_council_config())
+                            model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                            yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm selected models that are not installed. Falling back to the stable demo roster.'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm failed. Falling back to the stable demo roster.'})}\n\n"
 
-        orchestrator = CouncilOrchestrator()
-        try:
-            async for event in orchestrator.run(topic_text, parsed_attachments, cfg, deep_debate, run_id=run_id):
-                yield f"data: {json.dumps(event)}\n\n"
-                await asyncio.sleep(0)  # yield to event loop
-        except Exception as e:
-            metrics_store.finish_run(run_id, status="failed", error=str(e))
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                orchestrator = CouncilOrchestrator()
+                try:
+                    async for event in orchestrator.run(
+                        topic_text,
+                        parsed_attachments,
+                        cfg,
+                        deep_debate,
+                        run_id=run_id,
+                        token_budget_profile=resolved_budget_profile,
+                    ):
+                        if event.get("type") == "shutdown":
+                            yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                            return
+                        yield f"data: {json.dumps(redact_config(event))}\n\n"
+                        await asyncio.sleep(0)  # yield to event loop
+                except Exception as e:
+                    metrics_store.finish_run(run_id, status="failed", error=str(e))
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -167,14 +302,21 @@ class ChatRequest(BaseModel):
     member_id: str
     messages: List[ChatMessage]
     council_config: Optional[dict] = None
+    token_budget_profile: str = DEFAULT_TOKEN_BUDGET_PROFILE
 
 
 class ConfigCheckRequest(BaseModel):
     council_config: Optional[dict] = None
     attachment_names: List[str] = []
 
+
+class FeedbackRequest(BaseModel):
+    action_index: int
+    rating: str
+    note: str = ""
+
 @app.post("/council/chat")
-async def council_chat(req: ChatRequest):
+async def council_chat(req: ChatRequest, request: Request | None = None):
     """
     Interactive Debate Mode — stream a reply from a specific member
     """
@@ -182,13 +324,29 @@ async def council_chat(req: ChatRequest):
     run_id = metrics_store.start_run("chat", {"member_id": req.member_id})
     
     async def chat_stream():
-        yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
-        try:
-            async for chunk in orchestrator.chat_with_member(req.member_id, req.messages, req.council_config, run_id=run_id):
-                yield f"data: {json.dumps({'type': 'chat_token', 'chunk': chunk})}\n\n"
-            yield f"data: {json.dumps({'type': 'chat_done'})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        with track_active_stream():
+            request_cloud_keys = _request_cloud_keys(request)
+            resolved_budget_profile = normalize_token_budget_profile(req.token_budget_profile)
+            with scoped_cloud_keys(request_cloud_keys):
+                if is_shutdown_requested():
+                    yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                    return
+                yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                try:
+                    async for chunk in orchestrator.chat_with_member(
+                        req.member_id,
+                        req.messages,
+                        req.council_config,
+                        run_id=run_id,
+                        token_budget_profile=resolved_budget_profile,
+                    ):
+                        if is_shutdown_requested():
+                            yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                            return
+                        yield f"data: {json.dumps({'type': 'chat_token', 'chunk': chunk})}\n\n"
+                    yield f"data: {json.dumps({'type': 'chat_done'})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
         chat_stream(),
@@ -199,7 +357,7 @@ async def council_chat(req: ChatRequest):
         },
     )
 
-from memory_graph import memory_engine
+from memory_store import memory_store as memory_engine
 
 @app.get("/hardware/suggest")
 async def hardware_suggest():
@@ -216,16 +374,16 @@ async def ollama_check(req: ConfigCheckRequest):
     cfg = copy.deepcopy(req.council_config or get_default_council_config())
     status = ensure_models_for_config(cfg, auto_pull=False)
     has_image_input = any(name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")) for name in req.attachment_names)
-    vision_seats = [seat.get("label", seat_id) for seat_id, seat in cfg.items() if _vision_capable(seat.get("model", ""))]
+    image_seats = [seat.get("label", seat_id) for seat_id, seat in cfg.items() if supports_image_input(seat.get("model", ""))]
     warnings = []
-    if has_image_input and not vision_seats:
-        warnings.append("Image attachments are selected, but no seat is using a known vision-capable local model.")
+    if has_image_input and not image_seats:
+        warnings.append("Image attachments are selected, but no seat is using a known image-capable local model.")
     if len(req.attachment_names) > 5:
         warnings.append("Large attachment batches can slow the demo. Prefer 1-3 focused files.")
     return {
         **status,
         "warnings": warnings,
-        "vision_seats": vision_seats,
+        "image_seats": image_seats,
     }
 
 
@@ -238,17 +396,232 @@ async def get_memory():
     return memory_engine.get_graph_data()
 
 
+def _pick_top_files(graph_data: dict, k: int = 8) -> list[str]:
+    stats = graph_data.get("stats", {})
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in stats.get("top_inbound", []) + stats.get("top_outbound", []):
+        path = item[0] if isinstance(item, (list, tuple)) else item.get("id", "")
+        if path and path not in seen:
+            seen.add(path)
+            result.append(path)
+        if len(result) >= k:
+            break
+    # pad with isolated files if we have room
+    for iso in stats.get("isolated", []):
+        if len(result) >= k:
+            break
+        if iso not in seen:
+            seen.add(iso)
+            result.append(iso)
+    return result
+
+
+def _read_files_as_attachments(root: str, rel_paths: list[str]) -> list[dict]:
+    root_path = pathlib.Path(root).resolve()
+    attachments = []
+    for rel in rel_paths:
+        full = root_path / rel
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")[:12000]
+            attachments.append({
+                "kind": "text",
+                "filename": rel,
+                "content_type": "text/plain",
+                "text": text,
+                "summary": f"File: {rel}",
+            })
+        except Exception:
+            continue
+    return attachments
+
+
+class ReviewProjectRequest(BaseModel):
+    path: str = "."
+    deep_debate: bool = False
+    council_config: Optional[dict] = None
+    token_budget_profile: str = DEFAULT_TOKEN_BUDGET_PROFILE
+
+
+@app.post("/council/review-project")
+async def review_project(req: ReviewProjectRequest, request: Request | None = None):
+    root = os.path.abspath(req.path)
+    if not os.path.isdir(root):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
+
+    graph_data = await asyncio.to_thread(get_project_code_graph, root)
+    top_files = _pick_top_files(graph_data)
+    attachments = await asyncio.to_thread(_read_files_as_attachments, root, top_files)
+    topic = graph_data.get("review_input", f"Review the project at: {root}")
+    cfg = copy.deepcopy(req.council_config or get_default_council_config())
+
+    async def event_generator():
+        with track_active_stream():
+            request_cloud_keys = _request_cloud_keys(request)
+            resolved_budget_profile = normalize_token_budget_profile(req.token_budget_profile)
+            run_id = metrics_store.start_run(
+                "project_review",
+                {
+                    "path": root,
+                    "files_selected": len(attachments),
+                    "deep_debate": req.deep_debate,
+                    "token_budget_profile": resolved_budget_profile,
+                },
+            )
+            with scoped_cloud_keys(request_cloud_keys):
+                if is_shutdown_requested():
+                    yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                    return
+                yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'project_info', 'path': root, 'files_selected': top_files, 'total_files': graph_data['stats']['files']})}\n\n"
+
+                model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
+                if not model_status["ready"]:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Missing models: ' + ', '.join(model_status['missing'])})}\n\n"
+                    return
+
+                orchestrator = CouncilOrchestrator()
+                try:
+                    async for event in orchestrator.run(
+                        topic,
+                        attachments,
+                        cfg,
+                        req.deep_debate,
+                        run_id=run_id,
+                        token_budget_profile=resolved_budget_profile,
+                    ):
+                        if event.get("type") == "shutdown":
+                            yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                            return
+                        yield f"data: {json.dumps(redact_config(event))}\n\n"
+                        await asyncio.sleep(0)
+                except Exception as e:
+                    metrics_store.finish_run(run_id, status="failed", error=str(e))
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/project/code-graph")
-async def project_code_graph():
-    return get_project_code_graph()
+async def project_code_graph(path: str = "."):
+    return get_project_code_graph(path)
 
 
 @app.get("/demo/catalog")
 async def demo_catalog():
     return get_demo_catalog()
 
+
+@app.get("/config/presets")
+async def config_presets():
+    return load_presets()
+
+
+@app.get("/runs")
+async def list_persisted_runs(limit: int = 50, fingerprint_hash: Optional[str] = None):
+    return {"runs": run_store.list_runs(limit=limit, fingerprint_hash=fingerprint_hash)}
+
+
+@app.get("/skills")
+async def list_skills(limit: int = 50, domain: Optional[str] = None):
+    skills = await asyncio.to_thread(skill_registry.list_skills, limit, domain)
+    return {"skills": skills, "total": len(skills)}
+
+
+@app.get("/runs/{run_id}")
+async def get_persisted_run(run_id: str):
+    return run_store.get_run(run_id)
+
+
+@app.get("/runs/{run_id}/export")
+async def export_persisted_run(run_id: str, format: str = "md"):
+    export_format = (format or "md").strip().lower()
+    run = redact_config(run_store.get_run(run_id))
+    metrics = _metrics_run_for_export(run_id)
+
+    if not run:
+        return Response(
+            content=json.dumps({"error": "run_not_found", "run_id": run_id}),
+            media_type="application/json",
+            status_code=404,
+        )
+
+    markdown = _render_run_markdown(run, metrics)
+    payload = {"run": run, "metrics": metrics}
+
+    if export_format == "md":
+        return Response(
+            content=markdown,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.md"'},
+        )
+
+    if export_format == "json":
+        return Response(
+            content=json.dumps(payload, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.json"'},
+        )
+
+    if export_format == "zip":
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("report.md", markdown)
+            archive.writestr("run.json", json.dumps(run, indent=2))
+            archive.writestr("metrics.json", json.dumps(metrics, indent=2))
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.zip"'},
+        )
+
+    return Response(
+        content=json.dumps({"error": "unsupported_format", "format": export_format}),
+        media_type="application/json",
+        status_code=400,
+    )
+
+
+@app.delete("/runs/{run_id}")
+async def delete_persisted_run(run_id: str):
+    deleted = run_store.delete_run(run_id)
+    return {"run_id": run_id, "deleted": deleted}
+
+
+@app.post("/runs/{run_id}/feedback")
+async def record_run_feedback(run_id: str, req: FeedbackRequest):
+    run_store.record_feedback(run_id, req.action_index, req.rating, req.note)
+    return {"run_id": run_id, "action_index": req.action_index, "rating": req.rating, "recorded": True}
+
+
 @app.get("/health")
 async def health():
+    import httpx
+    import sqlite3 as _sqlite3
+
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get("http://localhost:11434/api/tags")
+            ollama_ok = r.status_code == 200
+    except Exception:
+        pass
+
+    db_ok = False
+    try:
+        conn = _sqlite3.connect(RUN_DB_PATH, timeout=1)
+        conn.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:
+        pass
+
     keys = {
         "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
         "openai": bool(os.getenv("OPENAI_API_KEY")),
@@ -256,7 +629,13 @@ async def health():
         "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
         "groq": bool(os.getenv("GROQ_API_KEY")),
     }
-    return {"status": "ok", "keys_configured": keys, "features": _feature_flags()}
+    return {
+        "status": "ok",
+        "ollama": ollama_ok,
+        "db": db_ok,
+        "keys_configured": keys,
+        "features": _feature_flags(),
+    }
 
 
 @app.get("/metrics/runs")

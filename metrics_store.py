@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
+from provider_caps import redact_config
+
 
 def _coerce_usage(usage: Any) -> Optional[dict]:
     if usage is None:
@@ -146,7 +148,7 @@ class MetricsStore:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(run) + "\n")
+                handle.write(json.dumps(redact_config(run)) + "\n")
         except Exception:
             pass
 
