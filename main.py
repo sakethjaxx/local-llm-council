@@ -187,7 +187,7 @@ async def root():
 
 @app.post("/council/stream")
 async def council_stream(
-    request: Request | None = None,
+    request: Request,
     topic_text: str = Form(""),
     council_config: str = Form(None),
     token_budget_profile: str = Form(DEFAULT_TOKEN_BUDGET_PROFILE),
@@ -316,7 +316,7 @@ class FeedbackRequest(BaseModel):
     note: str = ""
 
 @app.post("/council/chat")
-async def council_chat(req: ChatRequest, request: Request | None = None):
+async def council_chat(req: ChatRequest, request: Request):
     """
     Interactive Debate Mode — stream a reply from a specific member
     """
@@ -444,7 +444,7 @@ class ReviewProjectRequest(BaseModel):
 
 
 @app.post("/council/review-project")
-async def review_project(req: ReviewProjectRequest, request: Request | None = None):
+async def review_project(req: ReviewProjectRequest, request: Request):
     root = os.path.abspath(req.path)
     if not os.path.isdir(root):
         from fastapi import HTTPException

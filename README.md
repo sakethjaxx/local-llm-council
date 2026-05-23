@@ -51,6 +51,17 @@ For repeatable demo validation, use:
 
 - [demo_runner.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/demo_runner.md)
 - [demo_scorecard_template.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/demo_scorecard_template.md)
+- [demo_run_guide.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/demo_run_guide.md)
+- [self_improvement_guide.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/self_improvement_guide.md)
+
+## Guided Workflows
+
+Use these documents depending on what you are trying to do:
+
+- [demo_run_guide.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/demo_run_guide.md): step-by-step commands and UI flow for running the main demo scenarios
+- [demo_runner.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/demo_runner.md): scenario-based demo validation checklist
+- [demo_scorecard_template.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/demo_scorecard_template.md): notes template for scoring demo runs
+- [self_improvement_guide.md](/Users/sakethjaggaiahgari/Desktop/local-llm-council/self_improvement_guide.md): how to use the council to review and improve this project itself over time
 
 ## Quick Start
 

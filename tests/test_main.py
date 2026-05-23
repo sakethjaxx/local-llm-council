@@ -124,6 +124,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             metrics_store._active_runs.clear()
             metrics_store._recent_runs.clear()
         clear_shutdown_request()
+        self.empty_request = type("Req", (), {"headers": {}})()
 
     async def _read_stream(self, response):
         chunks = []
@@ -171,7 +172,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         }
         with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
              patch.object(main.CouncilOrchestrator, "run", new=fake_run):
-            response = await main.council_stream(topic_text="check this")
+            response = await main.council_stream(self.empty_request, topic_text="check this")
             payload = await self._read_stream(response)
 
         self.assertIn('"type": "run_started"', payload)
@@ -219,7 +220,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             "auto_pull_enabled": False,
         }
         with patch.object(main, "ensure_models_for_config", return_value=missing_status):
-            response = await main.council_stream(topic_text="check this")
+            response = await main.council_stream(self.empty_request, topic_text="check this")
             payload = await self._read_stream(response)
 
         self.assertIn('"type": "model_status"', payload)
@@ -242,7 +243,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         }
         with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
              patch.object(main.CouncilOrchestrator, "run", new=fake_run):
-            response = await main.council_stream(topic_text="check this")
+            response = await main.council_stream(self.empty_request, topic_text="check this")
             payload = await self._read_stream(response)
 
         self.assertIn('"type": "shutdown"', payload)
@@ -272,7 +273,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
              patch.object(main.CouncilOrchestrator, "run", new=fake_run):
-            response = await main.council_stream(topic_text="review these", attachments=uploads)
+            response = await main.council_stream(self.empty_request, topic_text="review these", attachments=uploads)
             await self._read_stream(response)
 
         self.assertEqual(captured["topic_text"], "review these")
@@ -316,7 +317,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
                  "perf": {"label": "P", "model": "ollama/qwen2.5:7b", "color": "#333", "icon": "P", "persona": "p"},
              }), \
              patch.object(main.CouncilOrchestrator, "run", new=fake_run):
-            response = await main.council_stream(topic_text="route me", dynamic_swarm=True)
+            response = await main.council_stream(self.empty_request, topic_text="route me", dynamic_swarm=True)
             payload = await self._read_stream(response)
 
         self.assertIn('"type": "swarm_routed"', payload)
@@ -345,7 +346,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
              patch("router_agent.generate_swarm", return_value=None), \
              patch.object(main.CouncilOrchestrator, "run", new=fake_run):
-            response = await main.council_stream(topic_text="route me", dynamic_swarm=True)
+            response = await main.council_stream(self.empty_request, topic_text="route me", dynamic_swarm=True)
             payload = await self._read_stream(response)
 
         self.assertIn('Dynamic Swarm failed. Falling back to the stable demo roster.', payload)
@@ -386,7 +387,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch.object(main.CouncilOrchestrator, "chat_with_member", new=fake_chat):
-            response = await main.council_chat(request)
+            response = await main.council_chat(request, self.empty_request)
             payload = await self._read_stream(response)
 
         self.assertIn('"type": "run_started"', payload)

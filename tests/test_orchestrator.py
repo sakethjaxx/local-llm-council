@@ -156,6 +156,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
              patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
              patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
              patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
              patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
              patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
             events = [event async for event in orchestrator.run("ship it", None, deep_debate=False, run_id="fast-run")]
@@ -191,6 +192,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
              patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
              patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
              patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
              patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
              patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42)), \
              patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
@@ -218,6 +220,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
              patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
              patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
              patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
              patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
              patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42)), \
              patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
@@ -273,6 +276,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
                  patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
                  patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
                  patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+                 patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
                  patch("orchestrator.get_search_context", side_effect=_return_empty_search):
                 events = [
                     event

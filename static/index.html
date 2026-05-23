@@ -394,15 +394,52 @@
       font-size: 15px;
       line-height: 1.6;
       color: #36413b;
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .card-body h1, .card-body h2, .card-body h3 {
       font-family: 'IBM Plex Sans', sans-serif;
       color: var(--text);
       margin: 16px 0 8px 0;
     }
+    .card-body p,
+    .card-body li,
+    .card-body blockquote,
+    .chat-msg,
+    .replay-phase,
+    .replay-run-meta,
+    .status-line {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .card-body strong { color: var(--accent); }
     .card-body ul { padding-left: 20px; margin-bottom: 12px; }
     .card-body li { margin-bottom: 4px; }
+    .card-body pre,
+    .chat-msg pre {
+      max-width: 100%;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      overflow-x: auto;
+      background: rgba(47, 93, 80, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--muted);
+    }
+    .card-body code,
+    .chat-msg code {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.92em;
+    }
 
     .debate-panel {
       margin-top: 40px;
@@ -805,6 +842,15 @@
         .replaceAll("'", '&#39;');
     }
 
+    marked.setOptions({
+      gfm: true,
+      breaks: true
+    });
+
+    function renderMarkdown(text) {
+      return marked.parse(text || '');
+    }
+
     function loadCloudKeys() {
       try {
         return JSON.parse(localStorage.getItem(CLOUD_KEY_STORAGE_KEY) || '{}');
@@ -1070,15 +1116,24 @@
       refreshPreflight();
     }
 
+    function removeFile(index) {
+      selectedFiles.splice(index, 1);
+      renderSelectedFiles();
+      refreshPreflight();
+    }
+
     function renderSelectedFiles() {
       const fileList = document.getElementById('fileList');
       if (!selectedFiles.length) {
         fileList.innerHTML = '';
         return;
       }
-      fileList.innerHTML = selectedFiles.map(file => {
+      fileList.innerHTML = selectedFiles.map((file, i) => {
         const sizeKb = Math.max(1, Math.round(file.size / 1024));
-        return `<div>${file.name} <span style="color:var(--warm)">(${sizeKb} KB)</span></div>`;
+        return `<div style="display:flex;align-items:center;gap:8px;">
+          <span>${file.name} <span style="color:var(--warm)">(${sizeKb} KB)</span></span>
+          <button onclick="removeFile(${i})" style="background:none;border:none;color:var(--warm);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;" title="Remove">×</button>
+        </div>`;
       }).join('');
     }
 
@@ -1120,7 +1175,12 @@
     fetchDemoCatalog();
     loadHardwareDefaults();
     document.getElementById('attachmentInput').addEventListener('change', (event) => {
-      selectedFiles = Array.from(event.target.files || []);
+      const incoming = Array.from(event.target.files || []);
+      const existingNames = new Set(selectedFiles.map(f => f.name));
+      for (const f of incoming) {
+        if (!existingNames.has(f.name)) selectedFiles.push(f);
+      }
+      event.target.value = '';
       renderSelectedFiles();
       refreshPreflight();
     });
@@ -1322,10 +1382,10 @@
           if (!rawCardContents[key]) rawCardContents[key] = '';
           rawCardContents[key] += ev.chunk;
           if (ev.member !== 'chairman') {
-            body.innerHTML = marked.parse(rawCardContents[key]);
+            body.innerHTML = renderMarkdown(rawCardContents[key]);
           } else {
-            // While streaming Chairman JSON, just show the raw text safely
-            body.innerHTML = "<pre style='color:var(--muted); font-size:12px'>" + rawCardContents[key] + "</pre>";
+            // While streaming Chairman JSON, show escaped text in a wrapped pre block.
+            body.innerHTML = `<pre>${escapeHtml(rawCardContents[key])}</pre>`;
           }
         }
         return;
@@ -1356,7 +1416,7 @@
             if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${d}</li>`).join('')}</ul>`;
             body.innerHTML = html;
           } catch (e) {
-            body.innerHTML = marked.parse(ev.full_text);
+            body.innerHTML = renderMarkdown(ev.full_text);
           }
         }
         return;
@@ -1463,7 +1523,7 @@
                 const ev = JSON.parse(line.slice(6));
                 if (ev.type === 'chat_token') {
                   fullReply += ev.chunk;
-                  aMsg.innerHTML = marked.parse(fullReply);
+                  aMsg.innerHTML = renderMarkdown(fullReply);
                   historyDiv.scrollTop = historyDiv.scrollHeight;
                 }
               } catch {}
@@ -1559,10 +1619,10 @@
             <ul>${(data.action_items || []).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
           `;
         } catch (e) {
-          return marked.parse(phase.output || '');
+          return renderMarkdown(phase.output || '');
         }
       }
-      return marked.parse(phase.output || '');
+      return renderMarkdown(phase.output || '');
     }
 
     async function loadReplayRunDetail(runId) {
