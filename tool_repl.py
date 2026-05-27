@@ -1,8 +1,14 @@
 import subprocess
 import os
 
+from logging_utils import get_logger
+
+
+logger = get_logger(__name__)
+
+
 def execute_python(code: str) -> str:
-    print("\n[🐍 Python REPL] Executing sandbox code...")
+    logger.info("python_tool_execution_started")
     
     if code.startswith("```python"):
         code = code[9:]

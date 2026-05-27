@@ -12,11 +12,10 @@ import os
 import pathlib
 import signal
 import zipfile
-import warnings
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +26,7 @@ from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES,
 from cloud_keys import extract_cloud_keys, scoped_cloud_keys
 from hardware_detect import get_default_council_config, get_hardware_suggestion
 from io_parser import parse_uploaded_file
+from logging_utils import get_logger
 from memory_store import memory_store
 from metrics_store import metrics_store
 from ollama_manager import auto_pull_enabled, ensure_models_for_config
@@ -38,15 +38,27 @@ from shutdown_state import clear_shutdown_request, is_shutdown_requested, reques
 from skill_registry import skill_registry
 
 load_dotenv()
+logger = get_logger(__name__)
 
-_host = os.environ.get("COUNCIL_HOST", "127.0.0.1")
-_api_key = os.environ.get("COUNCIL_API_KEY", "")
-if _host not in ("127.0.0.1", "localhost") and not _api_key:
-    warnings.warn(
-        "WARNING: Council server binding to a non-localhost address with no "
-        "COUNCIL_API_KEY set. All endpoints are unauthenticated.",
-        stacklevel=2,
-    )
+
+def _is_localhost(host: str) -> bool:
+    return host.strip().lower() in {"127.0.0.1", "localhost"}
+
+
+def verify_api_key(x_api_key: str = Header(None)) -> None:
+    expected_api_key = os.getenv("COUNCIL_API_KEY", "").strip()
+    if not expected_api_key:
+        return
+    if x_api_key != expected_api_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_api_key(x_api_key: str = Header(None)) -> None:
+    expected_api_key = os.getenv("COUNCIL_API_KEY", "").strip()
+    if not expected_api_key:
+        raise HTTPException(status_code=403, detail="COUNCIL_API_KEY is required for this endpoint")
+    if x_api_key != expected_api_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _handle_sigterm(signum, frame):
@@ -64,12 +76,19 @@ async def lifespan(app: FastAPI):
     del app
     clear_shutdown_request()
     asyncio.create_task(asyncio.to_thread(memory_store.rebuild_embeddings))
+    asyncio.create_task(asyncio.to_thread(memory_store.prune_memory))
+    asyncio.create_task(asyncio.to_thread(skill_registry.deduplicate_skills))
     yield
     if is_shutdown_requested():
         await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
 
 
-app = FastAPI(title="LLM Council", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="LLM Council",
+    version="1.0.0",
+    lifespan=lifespan,
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 def _allowed_origins() -> list[str]:
@@ -83,7 +102,7 @@ def _allowed_origins() -> list[str]:
 
 def _feature_flags() -> dict:
     return {
-        "python_tool_enabled": os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "true").lower() == "true",
+        "python_tool_enabled": os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() == "true",
         "metrics_file": os.getenv("COUNCIL_METRICS_FILE", "council_metrics.jsonl"),
         "cors_origins": _allowed_origins(),
         "default_provider": "ollama",
@@ -92,6 +111,13 @@ def _feature_flags() -> dict:
         "token_budget_profiles": list(TOKEN_BUDGET_PROFILES.keys()),
         "default_token_budget_profile": DEFAULT_TOKEN_BUDGET_PROFILE,
     }
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
 
 
 def _request_cloud_keys(request: Request | None) -> dict[str, str]:
@@ -198,11 +224,25 @@ async def council_stream(
     """
     SSE endpoint — streams council events as they happen.
     """
+    max_files = _int_env("COUNCIL_MAX_FILES", 10)
+    max_upload_mb = _int_env("COUNCIL_MAX_UPLOAD_MB", 20)
+    max_upload_bytes = max_upload_mb * 1024 * 1024
+    max_total_upload_bytes = 50 * 1024 * 1024
+
+    if len(attachments or []) > max_files:
+        raise HTTPException(status_code=400, detail=f"Max {max_files} attachments per run")
+
     parsed_attachments: list[dict] = []
+    total_upload_bytes = 0
     for upload in attachments or []:
         if not upload or not upload.filename:
             continue
-        raw = await upload.read()
+        raw = await upload.read(max_upload_bytes + 1)
+        if len(raw) > max_upload_bytes:
+            raise HTTPException(status_code=400, detail=f"File {upload.filename} exceeds {max_upload_mb}MB limit")
+        total_upload_bytes += len(raw)
+        if total_upload_bytes > max_total_upload_bytes:
+            raise HTTPException(status_code=400, detail="Total attachment size exceeds 50MB limit")
         parsed = parse_uploaded_file(upload.filename, upload.content_type or "application/octet-stream", raw)
         if parsed.get("kind") == "image":
             parsed["data"] = base64.b64encode(raw).decode()
@@ -602,6 +642,29 @@ async def record_run_feedback(run_id: str, req: FeedbackRequest):
 
 @app.get("/health")
 async def health():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    import httpx
+
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get("http://localhost:11434/api/tags")
+            ollama_ok = r.status_code == 200
+    except Exception:
+        pass
+
+    return {
+        "status": "ready" if ollama_ok else "degraded",
+        "ollama": ollama_ok,
+    }
+
+
+@app.get("/status", dependencies=[Depends(require_api_key)])
+async def status():
     import httpx
     import sqlite3 as _sqlite3
 
@@ -630,7 +693,7 @@ async def health():
         "groq": bool(os.getenv("GROQ_API_KEY")),
     }
     return {
-        "status": "ok",
+        "status": "ok" if db_ok else "degraded",
         "ollama": ollama_ok,
         "db": db_ok,
         "keys_configured": keys,
@@ -648,6 +711,22 @@ async def get_metrics_summary():
     return metrics_store.get_summary()
 
 
+@app.get("/metrics/quality")
+async def get_metrics_quality(limit: int = 100):
+    return run_store.list_quality_metrics(limit=max(1, min(limit, 500)))
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8765, reload=True)
+
+    host = os.getenv("COUNCIL_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = int(os.getenv("COUNCIL_PORT", "8765"))
+    api_key = os.getenv("COUNCIL_API_KEY", "").strip()
+
+    if not _is_localhost(host) and not api_key:
+        raise SystemExit(
+            "ERROR: COUNCIL_API_KEY must be set when binding to non-localhost. "
+            "Set COUNCIL_API_KEY or use COUNCIL_HOST=127.0.0.1"
+        )
+
+    uvicorn.run("main:app", host=host, port=port, reload=True)

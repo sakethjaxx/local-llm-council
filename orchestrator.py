@@ -9,15 +9,18 @@ Phase 3 │ Chairman Decision     — Synthesizes everything → final call
 import asyncio
 import json
 import os
+import random
 import re
 import time
 import contextlib
 from pathlib import Path
 from typing import AsyncIterator, Optional
 import litellm
+import tiktoken
 from budget_profiles import token_budget_for
 from hardware_detect import get_default_council_config
 from cloud_keys import litellm_kwargs_for_model
+from logging_utils import get_logger
 from memory_store import memory_store as memory_engine
 from io_parser import format_attachments_for_prompt, parse_input
 from search_engine import get_search_context
@@ -31,6 +34,53 @@ import smart_phase
 from summarizer import chunk_and_summarize
 from pydantic import BaseModel
 from typing import List
+
+
+logger = get_logger(__name__)
+_TOKEN_ENCODINGS: dict[str, object] = {}
+
+
+def _count_tokens(model: str, text: str) -> int:
+    try:
+        encoding_key = model or "default"
+        if encoding_key not in _TOKEN_ENCODINGS:
+            try:
+                _TOKEN_ENCODINGS[encoding_key] = tiktoken.encoding_for_model(model.replace("ollama/", ""))
+            except KeyError:
+                _TOKEN_ENCODINGS[encoding_key] = tiktoken.get_encoding("cl100k_base")
+        return len(_TOKEN_ENCODINGS[encoding_key].encode(text or ""))
+    except Exception:
+        try:
+            return litellm.token_counter(model=model, text=text)
+        except Exception:
+            return len(text or "") // 4
+
+
+def _truncate_to_token_budget(model: str, text: str, max_tokens: int) -> str:
+    marker = "\n[truncated]"
+    if max_tokens <= 0:
+        return ""
+    if _count_tokens(model, text) <= max_tokens:
+        return text
+
+    marker_tokens = _count_tokens(model, marker)
+    target_tokens = max_tokens - marker_tokens
+    if target_tokens <= 0:
+        return marker if marker_tokens <= max_tokens else ""
+
+    low = 0
+    high = len(text)
+    best = ""
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = text[:mid]
+        if _count_tokens(model, candidate) <= target_tokens:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best + marker
+
 
 class ChairmanDecision(BaseModel):
     verdict: str
@@ -54,11 +104,16 @@ def _usage_to_dict(usage):
 
 def parse_chairman_response(raw: str) -> dict:
     def normalize(result: dict, tier: str) -> dict:
+        consensus = result.get("consensus")
+        if isinstance(consensus, str):
+            consensus = [consensus] if consensus else []
+        elif not isinstance(consensus, list):
+            consensus = []
         return {
             "verdict": result.get("verdict", "parse_failed"),
             "risk_score": result.get("risk_score", -1),
             "action_items": result.get("action_items", []),
-            "consensus": result.get("consensus", ""),
+            "consensus": consensus,
             "disputes": result.get("disputes", []),
             "_parse_tier": result.get("_parse_tier", tier),
         }
@@ -81,7 +136,7 @@ def parse_chairman_response(raw: str) -> dict:
             "verdict": verdict_match.group(1) if verdict_match else "parse_failed",
             "risk_score": float(risk_match.group(1)) if risk_match else -1,
             "action_items": [],
-            "consensus": "",
+            "consensus": [],
             "disputes": [],
             "_parse_tier": "regex_extracted",
         }
@@ -90,10 +145,34 @@ def parse_chairman_response(raw: str) -> dict:
         "verdict": "parse_failed",
         "risk_score": -1,
         "action_items": [],
-        "consensus": "",
+        "consensus": [],
         "disputes": [],
         "_parse_tier": "parse_failed",
     }
+
+
+def _specificity_score(chairman_result: dict, raw_text: str) -> float:
+    action_items = chairman_result.get("action_items") or []
+    if not action_items:
+        return 0.0
+
+    scored_items = 0.0
+    for item in action_items:
+        text = str(item)
+        signals = 0
+        if len(text.split()) >= 6:
+            signals += 1
+        if re.search(r"\b[\w./-]+\.(py|js|ts|html|css|md|json|yml|yaml)(?::\d+)?\b", text):
+            signals += 1
+        if re.search(r"\b(add|remove|replace|validate|test|document|limit|sanitize|retry|measure)\b", text, re.IGNORECASE):
+            signals += 1
+        if re.search(r"\d", text):
+            signals += 1
+        scored_items += min(signals, 3) / 3
+
+    structure_bonus = 0.1 if any(label in raw_text.lower() for label in ("risk", "action", "because", "owner")) else 0.0
+    return round(min(1.0, (scored_items / len(action_items)) + structure_bonus), 3)
+
 
 # Make litellm not spam the console
 litellm.suppress_debug_info = True
@@ -114,7 +193,7 @@ class CouncilOrchestrator:
         self._token_budget = token_budget_for(kwargs.get("token_budget_profile"))
 
     def _python_tool_enabled_for_model(self, model: str) -> bool:
-        if os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "true").lower() != "true":
+        if os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() != "true":
             return False
         return caps_for(model)[0].tool_use
 
@@ -154,7 +233,7 @@ class CouncilOrchestrator:
         run_id: Optional[str] = None,
         emit_done: bool = True,
     ) -> str:
-        print(f"\n[🚀 API REQUEST Phase {phase}] -> Routing to {cfg['model']} ({cfg['label']})")
+        logger.info("llm_call_started", extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label")})
 
         full_text = ""
         max_retries = 3
@@ -255,7 +334,7 @@ class CouncilOrchestrator:
                 final_latency_ms = int((time.perf_counter() - started_at) * 1000)
                 final_usage = usage
                 success = True
-                print(f"[✅ API RESPONSE Phase {phase}] <- {cfg['label']} completed!")
+                logger.info("llm_call_completed", extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label")})
                 metrics_store.record_llm_call(
                     run_id=run_id,
                     member_id=member_id,
@@ -312,7 +391,19 @@ class CouncilOrchestrator:
                 break
             except Exception as e:
                 error_msg = str(e)
-                print(f"[⚠️ API WARNING Phase {phase}] <- {cfg['label']} attempt {attempt+1} failed: {error_msg}")
+                logger.warning(
+                    "llm_call_attempt_failed",
+                    extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label"), "attempt": attempt + 1, "error": error_msg},
+                )
+                error_lower = error_msg.lower()
+                is_retryable = any(marker in error_lower for marker in [
+                    "timeout", "timed out", "rate limit", "service unavailable",
+                    "503", "502", "429", "connection", "reset by peer"
+                ])
+                is_permanent = any(marker in error_lower for marker in [
+                    "model not found", "not found", "invalid api key", "unauthorized",
+                    "401", "403", "no such model", "pull model"
+                ])
                 metrics_store.record_llm_call(
                     run_id=run_id,
                     member_id=member_id,
@@ -324,14 +415,19 @@ class CouncilOrchestrator:
                     success=False,
                     error=error_msg,
                 )
-                if attempt < max_retries - 1:
-                    print(f"   Retrying {cfg['label']} in 2 seconds...")
-                    await asyncio.sleep(2)
-                else:
-                    print(f"[❌ API ERROR Phase {phase}] <- {cfg['label']} failed after {max_retries} attempts.")
+                if is_permanent or (not is_retryable and attempt > 0) or attempt >= max_retries - 1:
+                    logger.error(
+                        "llm_call_failed",
+                        extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label"), "attempts": max_retries},
+                    )
                     final_err = f"\n[Error connecting to {cfg['label']}: {error_msg}]"
                     full_text += final_err
                     await queue.put({"type": "member_token", "member": member_id, "chunk": final_err})
+                    break
+                if is_retryable and attempt < max_retries - 1:
+                    backoff = (2 ** attempt) + random.uniform(0, 1)
+                    logger.info("llm_call_retrying", extra={"label": cfg.get("label"), "backoff_s": round(backoff, 3)})
+                    await asyncio.sleep(backoff)
 
         if success:
             await record_success_once()
@@ -389,21 +485,25 @@ class CouncilOrchestrator:
         system_prompt = PHASE2_PROMPT.format(persona=cfg.get("persona", ""))
 
         prompt_parts = ["You are reviewing analyses from your peers:\n"]
-        for peer_id, analysis in analyses.items():
-            if peer_id == member_id:
-                continue
+        model_id = cfg.get("model", "")
+        context_window = caps_for(model_id)[0].context_window or 4096
+        max_total_input_tokens = context_window - self._token_budget["phase2"] - 800
+        max_total_input_tokens = max(125, max_total_input_tokens)
+        peers = [(peer_id, analysis) for peer_id, analysis in analyses.items() if peer_id != member_id]
+
+        for peer_id, analysis in peers:
             peer_label = members_config[peer_id].get("label", peer_id)
-            context_window = caps_for(cfg.get("model", ""))[0].context_window or 4096
-            estimated_tokens = len(analysis) // 4
-            available_tokens = context_window - 600
-            if estimated_tokens > available_tokens:
-                original_len = len(analysis)
-                max_chars = max(0, available_tokens) * 4
-                analysis = analysis[:max_chars]
-                print(f"[phase2] Truncated {cfg.get('model', '')} input: {original_len} → {len(analysis)} chars")
             prompt_parts.append(f"--- {peer_label} ---\n{analysis}\n")
         
         prompt = "\n".join(prompt_parts)
+        original_tokens = _count_tokens(model_id, prompt)
+        if original_tokens > max_total_input_tokens:
+            original_len = len(prompt)
+            prompt = _truncate_to_token_budget(model_id, prompt, max_total_input_tokens)
+            logger.info(
+                "phase2_input_truncated",
+                extra={"model": cfg.get("model", ""), "original_chars": original_len, "truncated_chars": len(prompt)},
+            )
         messages = self._build_messages(cfg.get("model", ""), system_prompt, prompt)
         await self._stream_llm_to_queue(
             member_id,
@@ -439,9 +539,63 @@ class CouncilOrchestrator:
             cfg = members_config.get(reviewer, {})
             council_brief += f"=== {cfg.get('label', reviewer)} REVIEW ===\n{review}\n\n"
 
+        chairman_model = chairman_cfg.get("model", "")
+        context_window = caps_for(chairman_model)[0].context_window or 4096
+        max_input_tokens = context_window - self._token_budget["phase3"] - 500
+        max_input_tokens = max(1, max_input_tokens)
+        original_len = len(council_brief)
+        original_tokens = _count_tokens(chairman_model, council_brief)
+        if original_tokens > max_input_tokens:
+            rebuilt_parts = []
+            used_tokens = 0
+            truncated = False
+
+            def add_section(section: str) -> bool:
+                nonlocal used_tokens, truncated
+                section_tokens = _count_tokens(chairman_model, section)
+                if used_tokens + section_tokens > max_input_tokens:
+                    truncated = True
+                    return False
+                rebuilt_parts.append(section)
+                used_tokens += section_tokens
+                return True
+
+            if search_results:
+                add_section(search_results + "\n\n")
+
+            if not truncated:
+                for member, analysis in analyses.items():
+                    cfg = members_config.get(member, {})
+                    section = f"=== {cfg.get('label', member)} ANALYSIS ===\n{analysis}\n\n"
+                    if not add_section(section):
+                        break
+
+            if not truncated:
+                review_header = "\n--- PEER REVIEWS ---\n\n"
+                for reviewer, review in reviews.items():
+                    cfg = members_config.get(reviewer, {})
+                    prefix = review_header if reviewer == next(iter(reviews), None) else ""
+                    section = f"{prefix}=== {cfg.get('label', reviewer)} REVIEW ===\n{review}\n\n"
+                    if not add_section(section):
+                        break
+
+            council_brief = "".join(rebuilt_parts)
+            marker = "\n[truncated]"
+            marker_tokens = _count_tokens(chairman_model, marker)
+            if truncated and used_tokens + marker_tokens <= max_input_tokens:
+                council_brief += marker
+
+            if _count_tokens(chairman_model, council_brief) > max_input_tokens:
+                council_brief = _truncate_to_token_budget(chairman_model, council_brief, max_input_tokens)
+
+            logger.info(
+                "phase3_input_truncated",
+                extra={"model": chairman_cfg.get("model"), "original_chars": original_len, "truncated_chars": len(council_brief)},
+            )
+
         messages = self._build_messages(
             chairman_cfg.get("model", ""),
-            PHASE3_PROMPT + "\n\nCRITICAL INSTRUCTION: You MUST follow the provided JSON schema. DO NOT wrap the output in markdown ticks.",
+            PHASE3_PROMPT,
             council_brief,
         )
 
@@ -522,6 +676,7 @@ class CouncilOrchestrator:
                     yield event
 
             reviews = {}
+            phase1_divergence = None
 
             if not deep_debate:
                 yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (Bypassed - Fast Mode)"}
@@ -532,6 +687,7 @@ class CouncilOrchestrator:
                 await asyncio.sleep(0.5)
             else:
                 is_unanimous, smart_score = await smart_phase.should_skip(analyses)
+                phase1_divergence = round(max(0.0, min(1.0, 1.0 - smart_score)), 4)
                 await asyncio.to_thread(run_store.update_smart_phase_score, run_id, smart_score)
 
                 if is_unanimous:
@@ -580,6 +736,7 @@ class CouncilOrchestrator:
                     yield event
 
             chairman_result = parse_chairman_response(chairman_decision_text)
+            specificity_score = _specificity_score(chairman_result, chairman_decision_text)
             await asyncio.to_thread(
                 run_store.record_phase_output,
                 run_id,
@@ -591,6 +748,13 @@ class CouncilOrchestrator:
                 None,
                 finish_reason=chairman_result.get("_parse_tier"),
                 attempt_number=None,
+            )
+            await asyncio.to_thread(
+                run_store.update_quality_metrics,
+                run_id,
+                chairman_result.get("_parse_tier"),
+                phase1_divergence,
+                specificity_score,
             )
             task = asyncio.create_task(
                 memory_engine.extract_memory(
@@ -639,47 +803,82 @@ class CouncilOrchestrator:
             for m in messages:
                 formatted_messages.append({"role": m.role, "content": m.content})
 
-        print(f"\n[💬 CHAT REQUEST] -> Routing to {cfg['model']} ({cfg['label']})")
+        logger.info("chat_call_started", extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id})
 
-        started_at = time.perf_counter()
-        try:
-            resp = await litellm.acompletion(
-                model=cfg["model"],
-                messages=formatted_messages,
-                max_tokens=self._token_budget["chat"],
-                stream=True,
-                **litellm_kwargs_for_model(cfg["model"]),
-            )
-            output_chars = 0
-            async for chunk in resp:
-                text_chunk = chunk.choices[0].delta.content or ""
-                if text_chunk:
-                    output_chars += len(text_chunk)
-                    yield text_chunk
-            metrics_store.record_llm_call(
-                run_id=run_id,
-                member_id=member_id,
-                phase=None,
-                model=cfg.get("model"),
-                label=cfg.get("label"),
-                attempt=1,
-                duration_ms=int((time.perf_counter() - started_at) * 1000),
-                success=True,
-                output_chars=output_chars,
-            )
-            metrics_store.finish_run(run_id, status="completed")
-        except Exception as e:
-            print(f"[❌ CHAT ERROR] <- {cfg['label']}: {str(e)}")
-            metrics_store.record_llm_call(
-                run_id=run_id,
-                member_id=member_id,
-                phase=None,
-                model=cfg.get("model"),
-                label=cfg.get("label"),
-                attempt=1,
-                duration_ms=int((time.perf_counter() - started_at) * 1000),
-                success=False,
-                error=str(e),
-            )
-            metrics_store.finish_run(run_id, status="failed", error=str(e))
-            yield f"\n[Error connecting to {cfg['label']}: {str(e)}]"
+        max_retries = 3
+        full_text = ""
+        output_chars = 0
+
+        for attempt in range(max_retries):
+            started_at = time.perf_counter()
+            try:
+                resp = await litellm.acompletion(
+                    model=cfg["model"],
+                    messages=formatted_messages,
+                    max_tokens=self._token_budget["chat"],
+                    stream=True,
+                    **litellm_kwargs_for_model(cfg["model"]),
+                )
+                async for chunk in resp:
+                    text_chunk = chunk.choices[0].delta.content or ""
+                    if text_chunk:
+                        full_text += text_chunk
+                        output_chars += len(text_chunk)
+                        yield text_chunk
+                duration_ms = int((time.perf_counter() - started_at) * 1000)
+                metrics_store.record_llm_call(
+                    run_id=run_id,
+                    member_id=member_id,
+                    phase=None,
+                    model=cfg.get("model"),
+                    label=cfg.get("label"),
+                    attempt=attempt + 1,
+                    duration_ms=duration_ms,
+                    success=True,
+                    output_chars=output_chars,
+                )
+                await asyncio.to_thread(
+                    run_store.record_phase_output,
+                    run_id, 0, member_id, full_text,
+                    None, None,
+                    duration_ms,
+                )
+                metrics_store.finish_run(run_id, status="completed")
+                return
+            except Exception as e:
+                error_msg = str(e)
+                logger.warning(
+                    "chat_call_attempt_failed",
+                    extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "attempt": attempt + 1, "error": error_msg},
+                )
+                error_lower = error_msg.lower()
+                is_retryable = any(marker in error_lower for marker in [
+                    "timeout", "timed out", "rate limit", "service unavailable",
+                    "503", "502", "429", "connection", "reset by peer"
+                ])
+                is_permanent = any(marker in error_lower for marker in [
+                    "model not found", "not found", "invalid api key", "unauthorized",
+                    "401", "403", "no such model", "pull model"
+                ])
+                metrics_store.record_llm_call(
+                    run_id=run_id,
+                    member_id=member_id,
+                    phase=None,
+                    model=cfg.get("model"),
+                    label=cfg.get("label"),
+                    attempt=attempt + 1,
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                    success=False,
+                    error=error_msg,
+                )
+                if is_permanent or (not is_retryable and attempt > 0) or attempt >= max_retries - 1:
+                    logger.error(
+                        "chat_call_failed",
+                        extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "error": error_msg},
+                    )
+                    metrics_store.finish_run(run_id, status="failed", error=error_msg)
+                    yield f"\n[Error connecting to {cfg['label']}: {error_msg}]"
+                    return
+                if is_retryable and attempt < max_retries - 1:
+                    backoff = (2 ** attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(backoff)

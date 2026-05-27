@@ -73,6 +73,29 @@ class RunStoreTests(unittest.TestCase):
         run = self.store.get_run("run-4")
         self.assertEqual(run["smart_phase_score"], 0.91)
 
+    def test_schema_migrations_are_recorded(self):
+        with self.store._connection() as conn:
+            rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+
+        self.assertEqual(
+            [row["version"] for row in rows],
+            ["001_smart_phase_score", "002_phase_output_observability", "003_quality_metrics"],
+        )
+
+    def test_quality_metrics_lifecycle(self):
+        self.store.begin_run("quality-run", "topic", {}, deep_debate=True)
+        self.store.update_quality_metrics("quality-run", "json", 0.25, 0.8)
+        self.store.finish_run("quality-run", "completed")
+
+        run = self.store.get_run("quality-run")
+        quality = self.store.list_quality_metrics()
+
+        self.assertEqual(run["parse_tier"], "json")
+        self.assertEqual(run["phase1_divergence"], 0.25)
+        self.assertEqual(run["specificity_score"], 0.8)
+        self.assertEqual(quality["runs"][0]["run_id"], "quality-run")
+        self.assertEqual(quality["summary"]["parse_tiers"], {"json": 1})
+
 
 if __name__ == "__main__":
     unittest.main()

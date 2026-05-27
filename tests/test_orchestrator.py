@@ -18,7 +18,7 @@ if "litellm" not in sys.modules:
     litellm_stub.acompletion = _unused_acompletion
     sys.modules["litellm"] = litellm_stub
 
-from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG, parse_chairman_response
+from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG, _count_tokens, _specificity_score, parse_chairman_response
 from run_store import RunStore
 
 
@@ -76,9 +76,21 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["verdict"], "parse_failed")
         self.assertEqual(result["risk_score"], -1)
         self.assertEqual(result["action_items"], [])
-        self.assertEqual(result["consensus"], "")
+        self.assertEqual(result["consensus"], [])
         self.assertEqual(result["disputes"], [])
         self.assertEqual(result["_parse_tier"], "parse_failed")
+
+    def test_specificity_score_rewards_concrete_action_items(self):
+        result = {
+            "action_items": [
+                "Add validation in main.py:228 and test uploads over 20MB before release.",
+                "Document COUNCIL_API_KEY behavior in SECURITY.md.",
+            ]
+        }
+
+        score = _specificity_score(result, "risk and action items")
+
+        self.assertGreaterEqual(score, 0.7)
 
     def test_build_messages_keeps_images_for_local_multimodal_model(self):
         orchestrator = CouncilOrchestrator()
@@ -207,6 +219,59 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(phase_two_calls), 3)
         self.assertEqual(events[-1]["type"], "done")
 
+    async def test_member_review_caps_total_prompt_budget(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "done"})
+            return "done"
+
+        cfg = {"label": "Reviewer", "model": "test/tiny", "persona": "test"}
+        members_config = {
+            "reviewer": cfg,
+            "peer_a": {"label": "Peer A"},
+            "peer_b": {"label": "Peer B"},
+        }
+        analyses = {
+            "reviewer": "self",
+            "peer_a": "a " * 20000,
+            "peer_b": "b " * 20000,
+        }
+
+        with patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._member_review("reviewer", cfg, members_config, analyses, queue)
+
+        prompt = captured["messages"][1]["content"]
+        self.assertLessEqual(_count_tokens("test/tiny", prompt), 4096 - orchestrator._token_budget["phase2"] - 800)
+
+    async def test_chairman_decide_caps_council_brief_budget(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "{}"})
+            return "{}"
+
+        chairman_cfg = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+        members_config = {
+            "peer_a": {"label": "Peer A"},
+            "peer_b": {"label": "Peer B"},
+        }
+        analyses = {"peer_a": "a " * 20000, "peer_b": "b " * 20000}
+        reviews = {"peer_a": "review a " * 10000, "peer_b": "review b " * 10000}
+
+        with patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._chairman_decide(chairman_cfg, members_config, analyses, reviews, queue)
+
+        brief = captured["messages"][1]["content"]
+        self.assertLessEqual(_count_tokens("test/tiny", brief), 4096 - orchestrator._token_budget["phase3"] - 500)
+
     async def test_run_applies_economy_token_budget_profile(self):
         orchestrator = CouncilOrchestrator()
         max_tokens_by_phase = {}
@@ -236,9 +301,9 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         self.assertEqual(events[-1]["type"], "done")
-        self.assertEqual(max_tokens_by_phase[1], {300})
-        self.assertEqual(max_tokens_by_phase[2], {250})
-        self.assertEqual(max_tokens_by_phase[3], {500})
+        self.assertEqual(max_tokens_by_phase[1], {500})
+        self.assertEqual(max_tokens_by_phase[2], {400})
+        self.assertEqual(max_tokens_by_phase[3], {800})
 
     async def test_run_records_all_fast_mode_phases(self):
         class FakeDelta:
@@ -294,6 +359,61 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run["status"], "completed")
         self.assertEqual({phase["phase"] for phase in run["phases"]}, {1, 2, 3})
         self.assertTrue(all(phase["output"] for phase in run["phases"]))
+
+    async def test_full_council_deep_debate_with_stubbed_ollama(self):
+        class FakeDelta:
+            content = "stubbed output"
+
+        class FakeChoice:
+            delta = FakeDelta()
+
+        class FakeChunk:
+            choices = [FakeChoice()]
+
+        class FakeStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if getattr(self, "_done", False):
+                    raise StopAsyncIteration
+                self._done = True
+                return FakeChunk()
+
+        async def fake_acompletion(*args, **kwargs):
+            return FakeStream()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = RunStore(os.path.join(temp_dir, "runs.db"))
+            with patch("orchestrator.run_store", store), \
+                 patch("orchestrator.litellm.acompletion", side_effect=fake_acompletion), \
+                 patch("orchestrator.parse_input", side_effect=_return_text), \
+                 patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+                 patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+                 patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+                 patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+                 patch("orchestrator.skill_registry.extract_skills", side_effect=_noop_async), \
+                 patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+                 patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42)):
+                events = [
+                    event
+                    async for event in CouncilOrchestrator().run(
+                        "run a full stubbed council",
+                        None,
+                        custom_config=DEFAULT_MEMBER_CONFIG,
+                        deep_debate=True,
+                        run_id="stubbed-full-run",
+                    )
+                ]
+            run = store.get_run("stubbed-full-run")
+
+        phase_counts = {}
+        for phase in run["phases"]:
+            phase_counts[phase["phase"]] = phase_counts.get(phase["phase"], 0) + 1
+
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(phase_counts, {1: 3, 2: 3, 3: 1})
 
 
 if __name__ == "__main__":

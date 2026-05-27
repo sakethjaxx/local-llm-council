@@ -195,6 +195,54 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
             count = conn.execute("SELECT COUNT(*) FROM memory_triples").fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_prune_memory_decays_and_deletes_low_confidence_triples(self):
+        now = time.time()
+        with self.store._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_triples (
+                    subject, predicate, object, confidence, reinforced,
+                    contradicted, last_seen, created_at, embedding
+                )
+                VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?)
+                """,
+                (
+                    "old-low",
+                    "recommended",
+                    "service mesh",
+                    0.26,
+                    now - (365 * 86400),
+                    now - (365 * 86400),
+                    np.array([1, 0, 0, 0], dtype=np.float32).tobytes(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_triples (
+                    subject, predicate, object, confidence, reinforced,
+                    contradicted, last_seen, created_at, embedding
+                )
+                VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?)
+                """,
+                (
+                    "fresh-high",
+                    "recommended",
+                    "service mesh",
+                    1.0,
+                    now,
+                    now,
+                    np.array([1, 0, 0, 0], dtype=np.float32).tobytes(),
+                ),
+            )
+
+        result = self.store.prune_memory(force=True)
+
+        with self.store._connection() as conn:
+            rows = conn.execute("SELECT subject FROM memory_triples ORDER BY subject").fetchall()
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual([row["subject"] for row in rows], ["fresh-high"])
+
 
 if __name__ == "__main__":
     unittest.main()

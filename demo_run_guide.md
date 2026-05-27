@@ -17,7 +17,7 @@ This guide helps you:
 From your terminal:
 
 ```bash
-cd /Users/sakethjaggaiahgari/Desktop/local-llm-council
+cd ~/local-llm-council
 source venv/bin/activate
 ```
 
@@ -290,7 +290,7 @@ curl http://127.0.0.1:8765/runs -o demo_history/$(date +%F)_runs.json
 Start:
 
 ```bash
-cd /Users/sakethjaggaiahgari/Desktop/local-llm-council
+cd ~/local-llm-council
 source venv/bin/activate
 uvicorn main:app --host 127.0.0.1 --port 8765
 ```

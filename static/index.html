@@ -7,8 +7,9 @@
   <title>LLM Council</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
+  <script type="text/javascript" src="https://unpkg.com/vis-network@10.1.0/standalone/umd/vis-network.min.js" integrity="sha384-Kp7cMaDnHOrgpE8FT6l7tUuGIo7kBcBVcttockpXN/whrsQBcy9ZcpKmr/1a/nMo" crossorigin="anonymous"></script>
   <style>
     :root {
       --bg: #f4f1ea;
@@ -18,11 +19,11 @@
       --border: rgba(43, 61, 53, 0.12);
       --border-strong: rgba(43, 61, 53, 0.24);
       --text: #1f2823;
-      --muted: #6b756f;
+      --muted: #58635d;
       --accent: #2f5d50;
       --accent-soft: #dde7e1;
-      --warm: #9c7a4d;
-      --danger: #bb5e4f;
+      --warm: #73552f;
+      --danger: #9f3d32;
       --chairman: #9c7a4d;
       --glass: blur(16px);
       --shadow: 0 18px 48px rgba(42, 52, 45, 0.08);
@@ -283,6 +284,52 @@
       border-radius: 16px;
       padding: 14px;
       box-shadow: 0 10px 24px rgba(42, 52, 45, 0.05);
+    }
+    .panel-empty,
+    .run-skeleton {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 42vh;
+      color: var(--muted);
+      text-align: center;
+      font-family: 'IBM Plex Mono', monospace;
+      gap: 12px;
+    }
+    .skeleton-line {
+      width: min(420px, 80%);
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(47, 93, 80, 0.08), rgba(47, 93, 80, 0.18), rgba(47, 93, 80, 0.08));
+      background-size: 240% 100%;
+      animation: skeletonPulse 1.3s ease-in-out infinite;
+    }
+    .skeleton-line.short { width: min(260px, 58%); }
+    @keyframes skeletonPulse {
+      0% { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+    .toast-stack {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 1200;
+      max-width: min(420px, calc(100vw - 32px));
+    }
+    .toast {
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid var(--border-strong);
+      border-left: 4px solid var(--danger);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      color: var(--text);
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.45;
     }
     .status-line {
       font-size: 12px;
@@ -592,7 +639,7 @@
       line-height: 1.6;
     }
 
-    @media (max-width: 980px) {
+    @media (max-width: 768px) {
       header {
         padding: 16px 18px;
         flex-wrap: wrap;
@@ -619,6 +666,50 @@
       .replay-sidebar {
         border-right: 0;
         border-bottom: 1px solid var(--border);
+      }
+    }
+
+    @media (max-width: 640px) {
+      header {
+        gap: 10px;
+      }
+      .title-group h1 {
+        font-size: 20px;
+      }
+      .title-group p {
+        font-size: 14px;
+      }
+      .header-actions {
+        width: 100%;
+        margin-left: 0;
+        flex-wrap: wrap;
+      }
+      .config-panel,
+      .council-panel {
+        padding: 18px;
+      }
+      .cards-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .council-card {
+        padding: 16px;
+      }
+      .cloud-key-row,
+      .chat-input-row {
+        grid-template-columns: 1fr;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #projectReviewSection > div:nth-child(2) {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .btn {
+        min-height: 40px;
+      }
+      .toast-stack {
+        right: 16px;
+        bottom: 16px;
       }
     }
 
@@ -665,7 +756,7 @@
         <div class="section-title">1. Context / Topic</div>
         <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or a focused review request..."></textarea>
         <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos. Text-like files are folded into the council prompt; image files are sent as visual inputs when the model supports them.</div>
-        <input type="file" id="attachmentInput" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
+        <input type="file" id="attachmentInput" aria-label="Attach files for council review" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
         <div class="file-list" id="fileList"></div>
         <div class="inline-actions" id="sampleActions"></div>
       </div>
@@ -755,8 +846,9 @@
 
     <!-- RIGHT PANEL: OUTPUT -->
     <section class="council-panel" id="councilPanel">
-      <div style="text-align: center; color: var(--muted); margin-top: 20vh; font-family: 'Fira Code', monospace;">
-        Ready for a project brief.
+      <div class="panel-empty">
+        <div>Ready for a project brief.</div>
+        <div class="helper-copy">Choose a preset, attach context, then run the council.</div>
       </div>
     </section>
   </main>
@@ -847,8 +939,44 @@
       breaks: true
     });
 
+    function sanitizeHtml(html) {
+      if (window.DOMPurify) {
+        return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      }
+      return escapeHtml(html || '');
+    }
+
     function renderMarkdown(text) {
-      return marked.parse(text || '');
+      return sanitizeHtml(marked.parse(text || ''));
+    }
+
+    function showToast(message) {
+      let stack = document.getElementById('toastStack');
+      if (!stack) {
+        stack = document.createElement('div');
+        stack.id = 'toastStack';
+        stack.className = 'toast-stack';
+        document.body.appendChild(stack);
+      }
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = message || 'Something went wrong.';
+      stack.appendChild(toast);
+      setTimeout(() => toast.remove(), 6500);
+    }
+
+    function renderLoadingState(panel, message) {
+      panel.innerHTML = `
+        <div class="run-skeleton">
+          <div>${escapeHtml(message || 'Starting council run...')}</div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line short"></div>
+        </div>
+      `;
+    }
+
+    function renderErrorState(panel, message) {
+      panel.innerHTML = `<div class="status-card"><div class="preset-title status-bad">Run failed</div><div class="status-line status-bad">${escapeHtml(message || 'Unknown error')}</div></div>`;
     }
 
     function loadCloudKeys() {
@@ -1202,7 +1330,7 @@
       btn.disabled = true;
       btn.innerHTML = '> PROCESSING...';
 
-      panel.innerHTML = '';
+      renderLoadingState(panel, 'Starting council run...');
       rawCardContents = {};
       thinkingCards = {};
       chatHistory = [];
@@ -1231,9 +1359,18 @@
           headers: cloudKeyHeaders(),
           body: formData
         });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          const message = err.detail || err.message || `Request failed with status ${resp.status}`;
+          showToast(message);
+          renderErrorState(panel, message);
+          return;
+        }
+
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let sawDone = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1243,12 +1380,20 @@
           buffer = lines.pop();
           for (const line of lines) {
             if (line.startsWith('data: ')) {
-              try { handleEvent(JSON.parse(line.slice(6)), panel); } catch {}
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'done') sawDone = true;
+                handleEvent(ev, panel);
+              } catch {}
             }
           }
         }
+        if (!sawDone) {
+          showToast('The stream ended before the council reported completion.');
+        }
       } catch (err) {
-        panel.innerHTML += `<div style="color:var(--danger)">Error: ${err.message}</div>`;
+        showToast(err.message || 'SSE connection failed.');
+        renderErrorState(panel, err.message);
       }
       
       btn.disabled = false;
@@ -1272,7 +1417,7 @@
       btn.disabled = true;
       btn.textContent = 'Scanning...';
       launchBtn.disabled = true;
-      panel.innerHTML = '';
+      renderLoadingState(panel, 'Scanning project and preparing review...');
       rawCardContents = {};
       thinkingCards = {};
       chatHistory = [];
@@ -1292,13 +1437,16 @@
 
         if (!resp.ok) {
           const err = await resp.json();
-          panel.innerHTML = `<div style="color:var(--danger)">Error: ${escapeHtml(err.detail || 'Unknown error')}</div>`;
+          const message = err.detail || 'Unknown error';
+          showToast(message);
+          renderErrorState(panel, message);
           return;
         }
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let sawDone = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1310,6 +1458,7 @@
             if (line.startsWith('data: ')) {
               try {
                 const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'done') sawDone = true;
                 if (ev.type === 'project_info') {
                   infoDiv.textContent = `Scanning ${ev.total_files} files → reviewing ${ev.files_selected.length} core files`;
                 } else {
@@ -1319,8 +1468,12 @@
             }
           }
         }
+        if (!sawDone) {
+          showToast('The project review stream ended before completion.');
+        }
       } catch (err) {
-        panel.innerHTML += `<div style="color:var(--danger)">Error: ${err.message}</div>`;
+        showToast(err.message || 'Project review connection failed.');
+        renderErrorState(panel, err.message);
       }
 
       btn.disabled = false;
@@ -1329,6 +1482,16 @@
     }
 
     function handleEvent(ev, panel) {
+      if (ev.type === 'error') {
+        const message = ev.message || 'The council run failed.';
+        showToast(message);
+        panel.appendChild(Object.assign(document.createElement('div'), {
+          className: 'status-card',
+          innerHTML: `<div class="preset-title status-bad">Runtime error</div><div class="status-line status-bad">${escapeHtml(message)}</div>`
+        }));
+        return;
+      }
+
       if (ev.type === 'warning') {
         const warning = document.createElement('div');
         warning.className = 'status-card';
@@ -1406,15 +1569,16 @@
             if (data.risk_score >= 8) riskColor = "var(--danger)";
             else if (data.risk_score >= 5) riskColor = "var(--pink)";
 
+            const riskScore = escapeHtml(data.risk_score ?? '');
             let html = `
-              <h2>VERDICT: ${data.verdict}</h2>
-              <div style="font-size: 24px; color: ${riskColor}; font-family: 'Orbitron'; margin: 10px 0;">RISK SCORE: ${data.risk_score}/10</div>
+              <h2>VERDICT: ${escapeHtml(data.verdict || '')}</h2>
+              <div style="font-size: 24px; color: ${riskColor}; font-family: 'Orbitron'; margin: 10px 0;">RISK SCORE: ${riskScore}/10</div>
               <h3>Action Items:</h3>
-              <ul>${(data.action_items || []).map(a => `<li>${a}</li>`).join('')}</ul>
+              <ul>${(data.action_items || []).map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>
             `;
-            if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${c}</li>`).join('')}</ul>`;
-            if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${d}</li>`).join('')}</ul>`;
-            body.innerHTML = html;
+            if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
+            if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`;
+            body.innerHTML = sanitizeHtml(html);
           } catch (e) {
             body.innerHTML = renderMarkdown(ev.full_text);
           }

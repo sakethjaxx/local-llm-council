@@ -82,10 +82,6 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         responses = [
             '{"name":"Security Review","body":"Inspect authentication boundaries and privilege escalation paths.","domain":"security"}',
             "yes",
-            '{"name":"Architecture Review","body":"Trace service boundaries before changing interfaces.","domain":"architecture"}',
-            "yes",
-            '{"name":"Performance Review","body":"Measure latency hotspots before caching.","domain":"backend"}',
-            "yes",
         ]
 
         async def fake_acompletion(*args, **kwargs):
@@ -98,8 +94,8 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
 
         with self.registry._connection() as conn:
             count = conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
-        self.assertEqual(count, 3)
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(count, 1)
+        self.assertEqual(len(calls), 2)
 
     async def test_sanity_check_discards_no_answer(self):
         self._insert_run_state("sanity-run", risk_score=2)
@@ -138,10 +134,6 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         responses = [
             '{"name":"Duplicate Skill","body":"duplicate dedup security review","domain":"security"}',
             "yes",
-            '{"name":"Duplicate Skill","body":"duplicate dedup security review","domain":"security"}',
-            "yes",
-            '{"name":"Duplicate Skill","body":"duplicate dedup security review","domain":"security"}',
-            "yes",
         ]
 
         async def fake_acompletion(*args, **kwargs):
@@ -154,7 +146,42 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         with self.registry._connection() as conn:
             row = conn.execute("SELECT COUNT(*) AS count, MAX(confidence) AS confidence FROM skills").fetchone()
         self.assertEqual(row["count"], 1)
-        self.assertAlmostEqual(row["confidence"], 0.65, places=3)
+        self.assertAlmostEqual(row["confidence"], 0.55, places=3)
+
+    def test_deduplicate_skills_merges_near_identical_embeddings(self):
+        vector = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        with self.registry._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("Security Review", "Inspect auth boundaries.", "security", None, 0.8, 2, time.time(), vector.tobytes()),
+            )
+            conn.execute(
+                """
+                INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("Auth Review", "Inspect authentication boundaries.", "security", None, 0.7, 3, time.time(), vector.tobytes()),
+            )
+            conn.execute(
+                """
+                INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("Access Review", "Inspect authorization boundaries.", "security", None, 0.6, 4, time.time(), vector.tobytes()),
+            )
+
+        result = self.registry.deduplicate_skills()
+
+        with self.registry._connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count, MAX(confidence) AS confidence, MAX(used_count) AS used_count FROM skills").fetchone()
+
+        self.assertEqual(result["merged"], 2)
+        self.assertEqual(row["count"], 1)
+        self.assertAlmostEqual(row["confidence"], 0.9, places=3)
+        self.assertEqual(row["used_count"], 9)
 
     async def test_get_skills_returns_relevant(self):
         with self.registry._connection() as conn:

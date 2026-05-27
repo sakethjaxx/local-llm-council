@@ -1,6 +1,10 @@
 from pathlib import Path
 
+from logging_utils import get_logger
 from project_graph import build_project_graph
+
+
+logger = get_logger(__name__)
 
 
 def _reverse_dependencies(graph, changed_file: str) -> set[str]:
@@ -22,7 +26,7 @@ def calculate_blast_radius(changed_files: list) -> str:
     if not changed_files:
         return ""
 
-    print("\n[🔌 Native Engine] Calculating Architectural Blast Radius...")
+    logger.info("blast_radius_started", extra={"changed_files": changed_files})
 
     graph = build_project_graph(Path.cwd())
     impacted_files = set()
@@ -30,10 +34,10 @@ def calculate_blast_radius(changed_files: list) -> str:
         impacted_files.update(_reverse_dependencies(graph, changed_file))
 
     if not impacted_files:
-        print("[✅ Native Engine] Blast Radius calculated. No major downstream dependencies detected.")
+        logger.info("blast_radius_completed", extra={"impacted_count": 0})
         return ""
 
-    print(f"[✅ Native Engine] Blast Radius calculated. Found {len(impacted_files)} impacted files.")
+    logger.info("blast_radius_completed", extra={"impacted_count": len(impacted_files)})
 
     result = "\n--- NATIVE ARCHITECTURAL BLAST RADIUS WARNING ---\n"
     result += "The following files import or depend on the changed files and may silently break:\n"

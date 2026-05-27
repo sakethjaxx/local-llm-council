@@ -11,7 +11,12 @@ import numpy as np
 from pydantic import BaseModel
 
 from embeddings import get_embedder
+from logging_utils import get_logger
+from provider_caps import caps_for
 from run_store import DB_PATH
+
+
+logger = get_logger(__name__)
 
 
 class Triple(BaseModel):
@@ -93,6 +98,10 @@ class SQLiteMemory:
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_subject ON memory_triples(subject);
                 CREATE INDEX IF NOT EXISTS idx_memory_last_seen ON memory_triples(last_seen DESC);
+                CREATE TABLE IF NOT EXISTS maintenance_state (
+                    key TEXT PRIMARY KEY,
+                    value REAL NOT NULL
+                );
                 """
             )
 
@@ -163,7 +172,7 @@ class SQLiteMemory:
         run_id: str = None,
     ) -> None:
         if not self._should_extract(run_id):
-            print(f"[Memory] Skipping extraction for run {run_id}: quality gate not met.")
+            logger.info("memory_extraction_skipped", extra={"run_id": run_id, "reason": "quality_gate"})
             return
 
         prompt = f"""You are an information extraction engine for an AI council.
@@ -175,15 +184,25 @@ Examples of predicates: "decided_to_use", "rejected", "identified_risk", "recomm
 Topic: {topic[:500]}...
 Verdict: {verdict[:1500]}..."""
         model = os.getenv("COUNCIL_MEMORY_MODEL", extraction_model)
+        use_response_format = caps_for(model)[1].response_format
+
+        if not use_response_format:
+            prompt += (
+                "\n\nRespond ONLY with valid JSON matching this exact schema:\n"
+                '{"triples": [{"subject": "...", "predicate": "...", "object": "..."}]}'
+            )
 
         try:
-            print(f"\n[🧠 Memory] Extracting triples using {model}...")
-            resp = await litellm.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                response_format=MemoryExtraction,
-            )
+            logger.info("memory_extraction_started", extra={"model": model, "run_id": run_id})
+            completion_kwargs = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 500,
+            }
+            if use_response_format:
+                completion_kwargs["response_format"] = MemoryExtraction
+
+            resp = await litellm.acompletion(**completion_kwargs)
             raw_output = resp.choices[0].message.content
             data = MemoryExtraction.model_validate_json(_extract_json_block(raw_output))
             now = time.time()
@@ -251,9 +270,9 @@ Verdict: {verdict[:1500]}..."""
                     existing_vectors.append(({"id": conn.execute("SELECT last_insert_rowid()").fetchone()[0]}, vector))
                     added += 1
 
-            print(f"[✅ Memory] Added {added} new facts and reinforced {updated} existing facts.")
+            logger.info("memory_extraction_completed", extra={"run_id": run_id, "added": added, "reinforced": updated})
         except Exception as exc:
-            print(f"[❌ Memory] Extraction failed: {exc}")
+            logger.exception("memory_extraction_failed", extra={"run_id": run_id, "error": str(exc)})
 
     async def get_context(self, topic: str, extraction_model: str, top_k: int = 10) -> str:
         del extraction_model
@@ -263,11 +282,16 @@ Verdict: {verdict[:1500]}..."""
                 """
                 SELECT id, subject, predicate, object, confidence, last_seen, embedding
                 FROM memory_triples
+                WHERE embedding IS NOT NULL
+                ORDER BY confidence DESC, last_seen DESC
+                LIMIT 500
                 """
             ).fetchall()
 
         if not rows:
             return ""
+        if len(rows) == 500:
+            logger.warning("memory_row_cap_hit", extra={"limit": 500})
 
         query_vector = self._embed_text(topic)
         now = time.time()
@@ -332,7 +356,57 @@ Verdict: {verdict[:1500]}..."""
                 )
                 rebuilt += 1
 
-        print(f"[Memory] Rebuilt embeddings for {rebuilt} triples.")
+        logger.info("memory_embeddings_rebuilt", extra={"rebuilt": rebuilt})
+
+    def prune_memory(
+        self,
+        min_confidence: float = 0.30,
+        decay_per_day: float = 0.99,
+        max_age_days: int = 30,
+        force: bool = False,
+    ) -> dict:
+        now = time.time()
+        with self._connection() as conn:
+            state = conn.execute(
+                "SELECT value FROM maintenance_state WHERE key = 'memory_pruned_at'"
+            ).fetchone()
+            last_pruned_at = float(state["value"]) if state is not None else None
+            if not force and last_pruned_at is not None and now - last_pruned_at < 86400:
+                return {"decayed": 0, "deleted": 0, "skipped": True}
+
+            rows = conn.execute(
+                "SELECT id, confidence, last_seen FROM memory_triples"
+            ).fetchall()
+            decayed = 0
+            for row in rows:
+                decay_start = max(float(row["last_seen"]), last_pruned_at or float(row["last_seen"]))
+                days = max(0.0, (now - decay_start) / 86400.0)
+                if days <= 0:
+                    continue
+                new_confidence = max(0.0, float(row["confidence"]) * (decay_per_day ** days))
+                if new_confidence != float(row["confidence"]):
+                    conn.execute(
+                        "UPDATE memory_triples SET confidence = ? WHERE id = ?",
+                        (new_confidence, row["id"]),
+                    )
+                    decayed += 1
+
+            cutoff = now - (max(1, int(max_age_days)) * 86400)
+            deleted = conn.execute(
+                "DELETE FROM memory_triples WHERE confidence < ? AND last_seen < ?",
+                (min_confidence, cutoff),
+            ).rowcount
+            conn.execute(
+                """
+                INSERT INTO maintenance_state (key, value)
+                VALUES ('memory_pruned_at', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (now,),
+            )
+
+        logger.info("memory_pruned", extra={"decayed": decayed, "deleted": deleted})
+        return {"decayed": decayed, "deleted": deleted, "skipped": False}
 
 
 memory_store = SQLiteMemory()

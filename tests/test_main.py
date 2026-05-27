@@ -62,12 +62,27 @@ def _install_test_stubs():
                 self.content_type = content_type
                 self._body = body
 
-            async def read(self):
-                return self._body
+            async def read(self, size=-1):
+                if size is None or size < 0:
+                    return self._body
+                return self._body[:size]
 
         fastapi_stub.FastAPI = FakeFastAPI
+        fastapi_stub.Depends = lambda dependency=None: dependency
         fastapi_stub.File = lambda default=None: default
         fastapi_stub.Form = lambda default=None: default
+        fastapi_stub.Header = lambda default=None: default
+        fastapi_stub.HTTPException = type(
+            "HTTPException",
+            (Exception,),
+            {
+                "__init__": lambda self, status_code=500, detail=None: (
+                    setattr(self, "status_code", status_code),
+                    setattr(self, "detail", detail),
+                    Exception.__init__(self, detail),
+                )[-1]
+            },
+        )
         fastapi_stub.Request = object
         fastapi_stub.UploadFile = UploadFile
         sys.modules["fastapi"] = fastapi_stub
@@ -136,10 +151,22 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         body = await main.health()
 
         self.assertEqual(body["status"], "ok")
+        self.assertEqual(set(body.keys()), {"status"})
+
+    async def test_status_reports_operational_detail(self):
+        body = await main.status()
+
         self.assertIn("ollama", body)
         self.assertIn("db", body)
-        self.assertIn("features", body)
+        self.assertIn("keys_configured", body)
         self.assertIn("python_tool_enabled", body["features"])
+
+    async def test_status_requires_configured_api_key(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(main.HTTPException) as ctx:
+                main.require_api_key(None)
+
+        self.assertEqual(ctx.exception.status_code, 403)
 
     async def test_ollama_status_endpoint(self):
         fake_status = {
@@ -415,6 +442,14 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runs["runs"][0]["run_id"], "metrics-run")
         self.assertEqual(summary["completed_runs"], 1)
         self.assertIn("openrouter/test-model", summary["by_model"])
+
+    async def test_metrics_quality_endpoint_delegates_to_run_store(self):
+        expected = {"runs": [{"run_id": "r1"}], "summary": {"runs_seen": 1}}
+        with patch.object(main.run_store, "list_quality_metrics", return_value=expected) as quality:
+            body = await main.get_metrics_quality(limit=25)
+
+        self.assertEqual(body, expected)
+        quality.assert_called_once_with(limit=25)
 
     async def test_project_code_graph_endpoint(self):
         body = await main.project_code_graph()

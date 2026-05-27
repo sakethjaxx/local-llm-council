@@ -1,21 +1,21 @@
 TOKEN_BUDGET_PROFILES = {
     "economy": {
-        "phase1": 300,
-        "phase2": 250,
-        "phase3": 500,
-        "chat": 300,
+        "phase1": 500,
+        "phase2": 400,
+        "phase3": 800,
+        "chat": 400,
     },
     "balanced": {
-        "phase1": 600,
-        "phase2": 400,
-        "phase3": 1200,
-        "chat": 600,
+        "phase1": 1000,
+        "phase2": 700,
+        "phase3": 2000,
+        "chat": 800,
     },
     "performance": {
-        "phase1": 900,
-        "phase2": 650,
-        "phase3": 1600,
-        "chat": 900,
+        "phase1": 1500,
+        "phase2": 1000,
+        "phase3": 3000,
+        "chat": 1200,
     },
 }
 
