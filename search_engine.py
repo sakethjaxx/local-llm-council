@@ -1,6 +1,11 @@
 from duckduckgo_search import DDGS
 import asyncio
 import litellm
+from cloud_keys import litellm_kwargs_for_model
+from logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 async def get_search_context(reviews: dict, extraction_model: str) -> str:
     # 1. Ask LLM if there is a factual dispute
@@ -9,17 +14,18 @@ async def get_search_context(reviews: dict, extraction_model: str) -> str:
         prompt += f"\n--- {reviewer} ---\n{text}"
         
     try:
-        print("\n[🕵️ Chairman] Checking for factual disputes...")
+        logger.info("search_dispute_check_started", extra={"model": extraction_model})
         resp = await litellm.acompletion(
             model=extraction_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=20
+            max_tokens=20,
+            **litellm_kwargs_for_model(extraction_model),
         )
         query = resp.choices[0].message.content.strip().replace('"', '')
         if query.upper() == "NONE" or len(query) > 50:
             return ""
             
-        print(f"[🌐 Web Search] Disputed fact detected. Querying DuckDuckGo: '{query}'")
+        logger.info("search_query_started", extra={"query": query})
         
         # 2. Run DDG Search
         def do_search():
@@ -35,5 +41,5 @@ async def get_search_context(reviews: dict, extraction_model: str) -> str:
             formatted += f"- {r.get('title')}: {r.get('body')}\n"
         return formatted
     except Exception as e:
-        print(f"[❌ Web Search Failed]: {e}")
+        logger.exception("search_failed", extra={"error": str(e)})
         return ""

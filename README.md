@@ -1,156 +1,80 @@
 # LLM Council
 
-Local-first multi-model review and decision engine built with FastAPI, LiteLLM, and Ollama.
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Tests](https://img.shields.io/badge/tests-pytest-green)
+![Runtime](https://img.shields.io/badge/runtime-local--first-informational)
 
-It runs a small council of specialist models in parallel, optionally lets them cross-review each other, and then produces a chairman verdict. The current build is aimed at **controlled demos** and local evaluation, not public multi-tenant deployment.
+LLM Council is a local-first multi-model review and decision engine with a FastAPI backend and web UI. It is for developers, researchers, and advanced users who want to compare, critique, and combine model outputs on their own machine or controlled infrastructure.
+
+## 30-Second Pitch
+
+Run several local or optional cloud LLMs as a structured review council. Each model analyzes the same topic, optionally critiques the others, and a chairman model produces a final verdict with risks and actions. The default path is local-first with Ollama, persistent run history, replay/export, and guardrails for self-hosted open-source use.
+
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Deployment Modes](#deployment-modes)
+- [Security Notes](#security-notes)
+- [Architecture](#architecture)
+- [Testing](#testing)
+- [Contributing](#contributing)
 
 ## What It Does
 
-- Runs a 3-seat council plus chairman over a prompt or project brief
-- Streams responses live in the web UI
-- Supports local Ollama model rosters with hardware-aware defaults
-- Accepts text plus uploaded files: `md`, `json`, `txt`, `pdf`, common code files, and images
-- Includes demo presets, sample inputs, and preflight checks
-- Tracks run metrics and exposes recent run summaries
-- Builds a project dependency graph for local analysis
-
-## Demo-Ready Path
-
-The app now includes a stable demo workflow in the web UI:
-
-- `Fast Triage`
-- `Code Review`
-- `Vision Review`
-
-Each preset provides:
-
-- a recommended roster
-- toggle defaults
-- starter topic text
-- optional bundled sample files
-
-Before launch, the UI runs a preflight check against the active roster and warns about:
-
-- missing Ollama models
-- image attachments without a vision-capable seat
-- oversized attachment batches that may slow a live demo
-
-If `Dynamic Swarm` fails or selects models that are not installed, the app falls back to the stable roster instead of hard failing.
+- Runs a council of local and optional cloud models in parallel, then produces a final synthesized verdict.
+- Streams council progress live in the browser and supports prompt, file, and image-assisted workflows.
+- Persists runs for replay, export, feedback, and metrics tracking.
+- Uses Ollama for local model execution and supports configurable model rosters and token budgets.
 
 ## Quick Start
 
-1. Create and activate a virtual environment.
-2. Install dependencies.
-3. Make sure Ollama is installed and running.
-4. Pull the models you plan to demo.
-5. Start the FastAPI app.
+1. `git clone <repo-url>`
+2. `cd local-llm-council`
+3. `python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate`
+4. `pip install -r requirements.txt`
+5. `cp env.example .env`
+6. `ollama pull llama3.2`
+7. `uvicorn main:app --port 8765`
+8. open `http://localhost:8765`
 
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --host 127.0.0.1 --port 8765
-```
+## Configuration
 
-Then open:
+| Variable | Description |
+| --- | --- |
+| `COUNCIL_HOST` | Host interface for the FastAPI server. Defaults to `127.0.0.1` for local-only access. |
+| `COUNCIL_PORT` | Port used by the FastAPI server. Defaults to `8765`. |
+| `COUNCIL_API_KEY` | Optional API key required for authenticated access when binding to non-localhost. |
+| `COUNCIL_ALLOW_URL_FETCH` | Enables remote URL fetching for council inputs. Disabled by default because it increases attack surface. |
+| `COUNCIL_ENABLE_PYTHON_TOOL` | Enables the Python REPL tool for phase-1 execution. Disabled by default. |
+| `COUNCIL_MAX_UPLOAD_MB` | Maximum size for a single uploaded attachment in MB. Defaults to `20`. |
+| `COUNCIL_MAX_FILES` | Maximum number of uploaded attachments per run. Defaults to `10`. |
 
-```text
-http://127.0.0.1:8765
-```
+## Deployment Modes
 
-## Recommended Local Models
-
-For controlled demos, preinstall the exact models used by your preset.
-
-Example pulls:
-
-```bash
-ollama pull qwen2.5:3b
-ollama pull qwen2.5:7b
-ollama pull qwen2.5-coder:7b
-ollama pull gemma2:2b
-ollama pull gemma2:9b
-ollama pull gemma3:4b
-ollama pull llama3.2:3b
-ollama pull llama3.1:8b
-ollama pull deepseek-r1:8b
-```
-
-## Environment
-
-Copy `env.example` to `.env`.
-
-API keys are optional for the default local-first path. Ollama-only demos do not require OpenAI, Anthropic, Gemini, OpenRouter, or Groq keys.
-
-Important flags:
-
-- `COUNCIL_CORS_ORIGINS`
-- `COUNCIL_ENABLE_PYTHON_TOOL`
-- `COUNCIL_METRICS_FILE`
-- `COUNCIL_MAX_RECENT_RUNS`
-- `COUNCIL_BOOTSTRAP_LOCAL_MODELS`
-
-## Main Endpoints
-
-- `GET /health`
-- `GET /hardware/suggest`
-- `GET /ollama/status`
-- `POST /ollama/check`
-- `POST /ollama/bootstrap`
-- `POST /council/stream`
-- `POST /council/chat`
-- `GET /council/memory`
-- `GET /project/code-graph`
-- `GET /demo/catalog`
-- `GET /metrics/runs`
-- `GET /metrics/summary`
-
-## File Inputs
-
-The council accepts uploaded attachments through the web UI.
-
-Supported prompt-folded files:
-
-- Markdown
-- JSON
-- Text
-- PDF
-- Common code/config files like `py`, `js`, `ts`, `html`, `css`, `yaml`, `yml`
-
-Supported image flow:
-
-- Images are only useful when at least one selected seat is using a known vision-capable model
-- The preflight check warns if images are attached but the roster has no vision-capable seat
-
-## Testing
-
-Run the targeted unit suite with:
-
-```bash
-python -m unittest tests.test_main tests.test_orchestrator tests.test_input_and_router
-```
+- Local only (default, no auth needed): `COUNCIL_HOST=127.0.0.1`
+- LAN/VPS: must set `COUNCIL_API_KEY`.
 
 ## Security Notes
 
-This project is intended for local or otherwise trusted environments.
+- Cloud API keys are stored in browser `localStorage`. Use them only on trusted machines and browsers.
+- The Python tool is disabled by default, requires Docker on the host, and is intended for advanced users only.
+- URL fetching is disabled by default. Enable it with `COUNCIL_ALLOW_URL_FETCH=true` only if you understand the SSRF risk.
 
-If you expose it publicly:
+## Architecture
 
-- disable the Python execution tool with `COUNCIL_ENABLE_PYTHON_TOOL=false`
-- do not rely on local host execution as a sandbox boundary
-- treat uploaded files and prompted code execution as sensitive attack surfaces
+LLM Council is a FastAPI application that orchestrates multiple model seats, streams intermediate output to a browser UI, persists run state and metrics locally, and can use Ollama-backed local models with optional cloud providers layered in. See `docs/ARCHITECTURE.md` for details.
 
-## Current Scope
+## Testing
 
-Good fit:
+```bash
+./venv/bin/pytest tests/ -q
+```
 
-- local demos
-- architectural review
-- code review experiments
-- comparing local model rosters
+The local eval harness under `tests/eval/` is separate because it requires Ollama and a pinned local model.
 
-Not yet a strong fit:
+## Contributing
 
-- public SaaS deployment
-- untrusted multi-user hosting
-- production-grade workflow enforcement without more hardening
+Contributions are welcome. See `CONTRIBUTING.md` for the development workflow and `SECURITY.md` for reporting vulnerabilities.

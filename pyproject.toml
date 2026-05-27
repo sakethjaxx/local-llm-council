@@ -1,0 +1,29 @@
+[project]
+name = "llm-council"
+version = "0.1.0"
+description = "Local-first multi-model AI council"
+requires-python = ">=3.12"
+readme = "README.md"
+license = {file = "LICENSE"}
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.32.1",
+  "python-multipart==0.0.18",
+  "python-dotenv==1.0.1",
+  "anthropic==0.45.0",
+  "openai==1.61.0",
+  "google-generativeai==0.8.3",
+  "Pillow==11.0.0",
+  "httpx==0.28.1",
+  "litellm==1.63.7",
+  "networkx==3.6.1",
+  "beautifulsoup4==4.14.3",
+  "PyMuPDF==1.27.2.3",
+  "duckduckgo_search==8.1.1",
+  "numpy==2.4.4",
+  "psutil==7.2.2",
+  "sentence-transformers==5.4.1",
+]
+
+[project.scripts]
+council = "cli:main"

@@ -1,3 +1,4 @@
+# DEPRECATED: retained for backward compatibility; new code should use memory_store.SQLiteMemory.
 import networkx as nx
 import json
 import os
@@ -5,6 +6,12 @@ import re
 import litellm
 from pydantic import BaseModel
 from typing import List
+
+from logging_utils import get_logger
+
+
+logger = get_logger(__name__)
+
 
 class Triple(BaseModel):
     subject: str
@@ -40,7 +47,7 @@ class GraphMemory:
                     data = json.load(f)
                     self.graph = nx.node_link_graph(data)
             except Exception as e:
-                print(f"[Memory] Failed to load graph: {e}")
+                logger.exception("legacy_memory_load_failed", extra={"error": str(e)})
 
     def _save(self):
         try:
@@ -48,7 +55,7 @@ class GraphMemory:
             with open(MEMORY_FILE, 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            print(f"[Memory] Failed to save graph: {e}")
+            logger.exception("legacy_memory_save_failed", extra={"error": str(e)})
 
     async def extract_memory(self, topic: str, verdict: str, extraction_model: str):
         prompt = f"""You are an information extraction engine for an AI council.
@@ -60,7 +67,7 @@ Examples of predicates: "decided_to_use", "rejected", "identified_risk", "recomm
 Topic: {topic[:500]}...
 Verdict: {verdict[:1500]}..."""
         try:
-            print(f"\n[🧠 Memory] Extracting triples using {extraction_model}...")
+            logger.info("legacy_memory_extraction_started", extra={"model": extraction_model})
             resp = await litellm.acompletion(
                 model=extraction_model,
                 messages=[{"role": "user", "content": prompt}],
@@ -75,10 +82,10 @@ Verdict: {verdict[:1500]}..."""
                 self.graph.add_edge(t.subject, t.object, label=t.predicate)
                 added += 1
                     
-            print(f"[✅ Memory] Successfully added {added} facts to Long-Term Knowledge Graph.")
+            logger.info("legacy_memory_extraction_completed", extra={"added": added})
             self._save()
         except Exception as e:
-            print(f"[❌ Memory] Extraction failed: {str(e)}")
+            logger.exception("legacy_memory_extraction_failed", extra={"error": str(e)})
 
     async def get_context(self, topic: str, extraction_model: str) -> str:
         if len(self.graph.nodes) == 0:
@@ -110,11 +117,11 @@ Use the provided JSON schema to return an array of strings under the 'keywords' 
             if relevant_edges:
                 context = "COUNCIL HISTORICAL MEMORY (Past decisions you must consider):\n"
                 context += "\n".join(list(set(relevant_edges))[:15]) # max 15 facts
-                print(f"\n[🧠 Memory] Found {len(set(relevant_edges))} historical facts related to: {keywords}")
+                logger.info("legacy_memory_context_found", extra={"edge_count": len(set(relevant_edges)), "keywords": keywords})
                 return context + "\n\n"
             return ""
         except Exception as e:
-            print(f"[⚠️ Memory] Context retrieval failed: {str(e)}")
+            logger.exception("legacy_memory_context_failed", extra={"error": str(e)})
             return ""
 
     def get_graph_data(self):

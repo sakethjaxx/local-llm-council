@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+council_runs.db*
+council_metrics.jsonl
+.env
+.git
+tests/
+.pytest_cache/

@@ -7,8 +7,9 @@
   <title>LLM Council</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
+  <script type="text/javascript" src="https://unpkg.com/vis-network@10.1.0/standalone/umd/vis-network.min.js" integrity="sha384-Kp7cMaDnHOrgpE8FT6l7tUuGIo7kBcBVcttockpXN/whrsQBcy9ZcpKmr/1a/nMo" crossorigin="anonymous"></script>
   <style>
     :root {
       --bg: #f4f1ea;
@@ -18,11 +19,11 @@
       --border: rgba(43, 61, 53, 0.12);
       --border-strong: rgba(43, 61, 53, 0.24);
       --text: #1f2823;
-      --muted: #6b756f;
+      --muted: #58635d;
       --accent: #2f5d50;
       --accent-soft: #dde7e1;
-      --warm: #9c7a4d;
-      --danger: #bb5e4f;
+      --warm: #73552f;
+      --danger: #9f3d32;
       --chairman: #9c7a4d;
       --glass: blur(16px);
       --shadow: 0 18px 48px rgba(42, 52, 45, 0.08);
@@ -284,6 +285,52 @@
       padding: 14px;
       box-shadow: 0 10px 24px rgba(42, 52, 45, 0.05);
     }
+    .panel-empty,
+    .run-skeleton {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 42vh;
+      color: var(--muted);
+      text-align: center;
+      font-family: 'IBM Plex Mono', monospace;
+      gap: 12px;
+    }
+    .skeleton-line {
+      width: min(420px, 80%);
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(47, 93, 80, 0.08), rgba(47, 93, 80, 0.18), rgba(47, 93, 80, 0.08));
+      background-size: 240% 100%;
+      animation: skeletonPulse 1.3s ease-in-out infinite;
+    }
+    .skeleton-line.short { width: min(260px, 58%); }
+    @keyframes skeletonPulse {
+      0% { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+    .toast-stack {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 1200;
+      max-width: min(420px, calc(100vw - 32px));
+    }
+    .toast {
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid var(--border-strong);
+      border-left: 4px solid var(--danger);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      color: var(--text);
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
     .status-line {
       font-size: 12px;
       color: var(--muted);
@@ -316,6 +363,25 @@
       font-size: 12px;
       line-height: 1.5;
       margin-top: 4px;
+    }
+    .cloud-key-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .cloud-key-row {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    .cloud-key-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .council-panel {
@@ -375,15 +441,52 @@
       font-size: 15px;
       line-height: 1.6;
       color: #36413b;
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .card-body h1, .card-body h2, .card-body h3 {
       font-family: 'IBM Plex Sans', sans-serif;
       color: var(--text);
       margin: 16px 0 8px 0;
     }
+    .card-body p,
+    .card-body li,
+    .card-body blockquote,
+    .chat-msg,
+    .replay-phase,
+    .replay-run-meta,
+    .status-line {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .card-body strong { color: var(--accent); }
     .card-body ul { padding-left: 20px; margin-bottom: 12px; }
     .card-body li { margin-bottom: 4px; }
+    .card-body pre,
+    .chat-msg pre {
+      max-width: 100%;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      overflow-x: auto;
+      background: rgba(47, 93, 80, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--muted);
+    }
+    .card-body code,
+    .chat-msg code {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.92em;
+    }
 
     .debate-panel {
       margin-top: 40px;
@@ -466,8 +569,77 @@
       font-family: 'IBM Plex Sans', sans-serif; color: var(--text); font-weight: 600;
     }
     #memoryNetwork { flex: 1; background: #f8f5ef; }
+    .replay-layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 0;
+      flex: 1;
+      min-height: 0;
+    }
+    .replay-sidebar {
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      overflow-y: auto;
+      background: rgba(255, 255, 255, 0.52);
+    }
+    .replay-detail {
+      padding: 18px;
+      overflow-y: auto;
+    }
+    .replay-run-item {
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.7);
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+    .replay-run-item:hover {
+      border-color: var(--border-strong);
+      background: rgba(255, 255, 255, 0.92);
+    }
+    .replay-run-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .replay-run-meta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      line-height: 1.5;
+    }
+    .replay-phase {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      margin-top: 14px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .replay-phase-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .replay-member {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .replay-phase-meta {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    .replay-empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
 
-    @media (max-width: 980px) {
+    @media (max-width: 768px) {
       header {
         padding: 16px 18px;
         flex-wrap: wrap;
@@ -488,6 +660,57 @@
         align-items: flex-start;
         flex-direction: column;
       }
+      .replay-layout {
+        grid-template-columns: 1fr;
+      }
+      .replay-sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+    }
+
+    @media (max-width: 640px) {
+      header {
+        gap: 10px;
+      }
+      .title-group h1 {
+        font-size: 20px;
+      }
+      .title-group p {
+        font-size: 14px;
+      }
+      .header-actions {
+        width: 100%;
+        margin-left: 0;
+        flex-wrap: wrap;
+      }
+      .config-panel,
+      .council-panel {
+        padding: 18px;
+      }
+      .cards-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .council-card {
+        padding: 16px;
+      }
+      .cloud-key-row,
+      .chat-input-row {
+        grid-template-columns: 1fr;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #projectReviewSection > div:nth-child(2) {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .btn {
+        min-height: 40px;
+      }
+      .toast-stack {
+        right: 16px;
+        bottom: 16px;
+      }
     }
 
   </style>
@@ -504,6 +727,7 @@
       <p>Local multi-model analysis with memory, metrics, and hardware-aware routing.</p>
     </div>
     <div class="header-actions">
+      <button class="btn btn-small" onclick="openReplayModal()">Replay runs</button>
       <button class="btn btn-small" onclick="viewCodeGraph()">View code graph</button>
       <button class="btn btn-small" onclick="viewMemory()">View memory graph</button>
     </div>
@@ -532,7 +756,7 @@
         <div class="section-title">1. Context / Topic</div>
         <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or a focused review request..."></textarea>
         <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos. Text-like files are folded into the council prompt; image files are sent as visual inputs when the model supports them.</div>
-        <input type="file" id="attachmentInput" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
+        <input type="file" id="attachmentInput" aria-label="Attach files for council review" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
         <div class="file-list" id="fileList"></div>
         <div class="inline-actions" id="sampleActions"></div>
       </div>
@@ -545,6 +769,42 @@
           <button class="btn btn-small" onclick="applyModelProfile('quality')">Quality</button>
         </div>
         <div class="helper-copy">Profiles swap the council between smaller and larger local Ollama models. You can still override any seat manually.</div>
+      </div>
+
+      <div>
+        <div class="section-title">2.7 Token Budget</div>
+        <div class="inline-actions">
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('economy')">Economy</button>
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('balanced')">Balanced</button>
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('performance')">Performance</button>
+        </div>
+        <div class="helper-copy" id="tokenBudgetSummary">Balanced profile: standard council token caps.</div>
+      </div>
+
+      <div>
+        <div class="section-title">
+          2.6 Cloud Keys
+          <button class="btn btn-small" onclick="clearCloudKeys()">Clear keys</button>
+        </div>
+        <div class="cloud-key-grid">
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">OpenAI</div>
+            <input type="password" id="keyOpenAI" placeholder="sk-..." oninput="persistCloudKeys()">
+          </div>
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">Anthropic</div>
+            <input type="password" id="keyAnthropic" placeholder="sk-ant-..." oninput="persistCloudKeys()">
+          </div>
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">Gemini</div>
+            <input type="password" id="keyGemini" placeholder="AIza..." oninput="persistCloudKeys()">
+          </div>
+          <div class="cloud-key-row">
+            <div class="cloud-key-label">Groq</div>
+            <input type="password" id="keyGroq" placeholder="gsk_..." oninput="persistCloudKeys()">
+          </div>
+        </div>
+        <div class="helper-copy">Stored in this browser only. Keys are sent as request headers and are not written to server-side disk state.</div>
       </div>
 
       <div>
@@ -570,12 +830,25 @@
         Run council
       </button>
 
+      <div style="margin-top: 12px;">
+        <button class="btn btn-small" onclick="toggleProjectReview()" id="projectReviewToggle">📁 Review Local Project</button>
+        <div id="projectReviewSection" style="display:none; margin-top: 10px; padding: 14px; background: rgba(255,255,255,0.5); border: 1px solid var(--border); border-radius: 12px;">
+          <div class="helper-copy" style="margin-bottom: 8px;">Enter the absolute path to a local project directory. The council will scan its files, pick the most connected ones, and run a full review.</div>
+          <div style="display:flex; gap: 8px; align-items:center;">
+            <input type="text" id="projectPathInput" placeholder="/Users/you/projects/my-app" style="flex:1; padding: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); outline: none;">
+            <button class="btn btn-solid" id="projectReviewBtn" onclick="launchProjectReview()" style="white-space:nowrap;">Scan &amp; Review</button>
+          </div>
+          <div id="projectScanInfo" style="margin-top: 8px; font-size: 12px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
+        </div>
+      </div>
+
     </aside>
 
     <!-- RIGHT PANEL: OUTPUT -->
     <section class="council-panel" id="councilPanel">
-      <div style="text-align: center; color: var(--muted); margin-top: 20vh; font-family: 'Fira Code', monospace;">
-        Ready for a project brief.
+      <div class="panel-empty">
+        <div>Ready for a project brief.</div>
+        <div class="helper-copy">Choose a preset, attach context, then run the council.</div>
       </div>
     </section>
   </main>
@@ -587,6 +860,23 @@
         <button class="btn btn-small" onclick="closeMemory()">X</button>
       </div>
       <div id="memoryNetwork"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="replayModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>Run replay</span>
+        <button class="btn btn-small" onclick="closeReplayModal()">X</button>
+      </div>
+      <div class="replay-layout">
+        <div class="replay-sidebar" id="replayRunList">
+          <div class="replay-empty">Loading past runs...</div>
+        </div>
+        <div class="replay-detail" id="replayRunDetail">
+          <div class="replay-empty">Select a run to inspect its phases.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -606,6 +896,13 @@
     let selectedFiles = [];
     let demoCatalog = null;
     let preflightState = null;
+    const CLOUD_KEY_STORAGE_KEY = 'llmCouncilCloudKeys';
+    let tokenBudgetProfile = 'balanced';
+    const TOKEN_BUDGET_SUMMARIES = {
+      economy: 'Economy profile: shorter answers for lower latency on smaller local models.',
+      balanced: 'Balanced profile: standard council token caps.',
+      performance: 'Performance profile: longer answers with higher latency and memory cost.'
+    };
 
     const MODEL_PROFILES = {
       turbo: {
@@ -637,9 +934,129 @@
         .replaceAll("'", '&#39;');
     }
 
+    marked.setOptions({
+      gfm: true,
+      breaks: true
+    });
+
+    function sanitizeHtml(html) {
+      if (window.DOMPurify) {
+        return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      }
+      return escapeHtml(html || '');
+    }
+
+    function renderMarkdown(text) {
+      return sanitizeHtml(marked.parse(text || ''));
+    }
+
+    function showToast(message) {
+      let stack = document.getElementById('toastStack');
+      if (!stack) {
+        stack = document.createElement('div');
+        stack.id = 'toastStack';
+        stack.className = 'toast-stack';
+        document.body.appendChild(stack);
+      }
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = message || 'Something went wrong.';
+      stack.appendChild(toast);
+      setTimeout(() => toast.remove(), 6500);
+    }
+
+    function renderLoadingState(panel, message) {
+      panel.innerHTML = `
+        <div class="run-skeleton">
+          <div>${escapeHtml(message || 'Starting council run...')}</div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line short"></div>
+        </div>
+      `;
+    }
+
+    function renderErrorState(panel, message) {
+      panel.innerHTML = `<div class="status-card"><div class="preset-title status-bad">Run failed</div><div class="status-line status-bad">${escapeHtml(message || 'Unknown error')}</div></div>`;
+    }
+
+    function loadCloudKeys() {
+      try {
+        return JSON.parse(localStorage.getItem(CLOUD_KEY_STORAGE_KEY) || '{}');
+      } catch (e) {
+        console.error('Failed to parse stored cloud keys', e);
+        return {};
+      }
+    }
+
+    function persistCloudKeys() {
+      const keys = {
+        openai: document.getElementById('keyOpenAI')?.value.trim() || '',
+        anthropic: document.getElementById('keyAnthropic')?.value.trim() || '',
+        gemini: document.getElementById('keyGemini')?.value.trim() || '',
+        groq: document.getElementById('keyGroq')?.value.trim() || ''
+      };
+      localStorage.setItem(CLOUD_KEY_STORAGE_KEY, JSON.stringify(keys));
+    }
+
+    function hydrateCloudKeys() {
+      const keys = loadCloudKeys();
+      document.getElementById('keyOpenAI').value = keys.openai || '';
+      document.getElementById('keyAnthropic').value = keys.anthropic || '';
+      document.getElementById('keyGemini').value = keys.gemini || '';
+      document.getElementById('keyGroq').value = keys.groq || '';
+    }
+
+    function clearCloudKeys() {
+      localStorage.removeItem(CLOUD_KEY_STORAGE_KEY);
+      hydrateCloudKeys();
+    }
+
+    function setTokenBudgetProfile(profile) {
+      tokenBudgetProfile = ['economy', 'balanced', 'performance'].includes(profile) ? profile : 'balanced';
+      const summary = document.getElementById('tokenBudgetSummary');
+      if (summary) {
+        summary.textContent = TOKEN_BUDGET_SUMMARIES[tokenBudgetProfile];
+      }
+    }
+
+    function cloudKeyHeaders() {
+      const keys = loadCloudKeys();
+      const headers = {};
+      if (keys.openai) headers['X-OpenAI-API-Key'] = keys.openai;
+      if (keys.anthropic) headers['X-Anthropic-API-Key'] = keys.anthropic;
+      if (keys.gemini) headers['X-Gemini-API-Key'] = keys.gemini;
+      if (keys.groq) headers['X-Groq-API-Key'] = keys.groq;
+      return headers;
+    }
+
     function syncToggles(preset) {
-      document.getElementById('deepDebateToggle').checked = Boolean(preset.deep_debate);
-      document.getElementById('dynamicSwarmToggle').checked = Boolean(preset.dynamic_swarm);
+      const toggles = preset.toggles || {};
+      document.getElementById('deepDebateToggle').checked = Boolean(toggles.deep_debate ?? preset.deep_debate);
+      document.getElementById('dynamicSwarmToggle').checked = Boolean(toggles.dynamic_swarm ?? preset.dynamic_swarm);
+    }
+
+    function configFromPreset(preset) {
+      if (preset.config) return JSON.parse(JSON.stringify(preset.config));
+      const seats = preset.seats || [];
+      const keys = ['architect', 'security', 'perf'];
+      const config = {};
+      seats.slice(0, 3).forEach((seat, index) => {
+        config[keys[index]] = {
+          label: seat.label || `Seat ${index + 1}`,
+          model: seat.model,
+          color: seat.color || ['#4D6BFE', '#FF4444', '#00A76F'][index],
+          icon: seat.icon || ['◆', '◇', '○'][index],
+          persona: seat.persona || ''
+        };
+      });
+      config.chairman = {
+        label: 'Chairman',
+        model: preset.chairman_model || 'ollama/qwen2.5:7b',
+        color: '#F5C842',
+        icon: '👑',
+        persona: preset.chairman_persona || 'You are the Chairman. Synthesize the council into a decisive summary with concrete next steps.'
+      };
+      return config;
     }
 
     function renderPresets() {
@@ -667,14 +1084,14 @@
         box.innerHTML = '';
         return;
       }
-      box.innerHTML = demoCatalog.samples.map(sample => `
+      box.innerHTML = (demoCatalog.samples || []).map(sample => `
         <button class="btn btn-small" onclick="attachSample('${sample.id}')">${escapeHtml(sample.label)}</button>
       `).join('');
     }
 
     async function fetchDemoCatalog() {
       try {
-        const resp = await fetch('/demo/catalog');
+        const resp = await fetch('/config/presets');
         demoCatalog = await resp.json();
         renderPresets();
         renderSampleActions();
@@ -685,7 +1102,7 @@
 
     async function attachSample(sampleId) {
       if (!demoCatalog) return;
-      const sample = demoCatalog.samples.find(item => item.id === sampleId);
+      const sample = (demoCatalog.samples || []).find(item => item.id === sampleId);
       if (!sample) return;
 
       const resp = await fetch(`/demo-samples/${sample.filename}`);
@@ -701,7 +1118,10 @@
       const preset = demoCatalog.presets.find(item => item.id === presetId);
       if (!preset) return;
       selectedFiles = [];
-      for (const sampleId of preset.sample_ids || []) {
+      const sampleIds = preset.sample_ids || (preset.sample_files || [])
+        .map(filename => (demoCatalog.samples || []).find(sample => sample.filename === filename)?.id)
+        .filter(Boolean);
+      for (const sampleId of sampleIds) {
         await attachSample(sampleId);
       }
       renderSelectedFiles();
@@ -713,8 +1133,8 @@
       const preset = demoCatalog.presets.find(item => item.id === presetId);
       if (!preset) return;
 
-      councilConfig = JSON.parse(JSON.stringify(preset.config));
-      document.getElementById('topicText').value = preset.topic || '';
+      councilConfig = configFromPreset(preset);
+      document.getElementById('topicText').value = preset.topic || preset.topic_placeholder || '';
       syncToggles(preset);
       renderSeats();
       refreshPreflight();
@@ -740,15 +1160,15 @@
         const missingHtml = (preflightState.missing || []).length
           ? `<div class="status-line status-bad">Missing models: ${escapeHtml(preflightState.missing.join(', '))}</div>`
           : `<div class="status-line status-good">All required local models are installed.</div>`;
-        const visionHtml = selectedFiles.some(file => file.type.startsWith('image/'))
-          ? `<div class="status-line ${preflightState.vision_seats.length ? 'status-good' : 'status-warn'}">Vision seats: ${escapeHtml((preflightState.vision_seats || []).join(', ') || 'none')}</div>`
+        const imageHtml = selectedFiles.some(file => file.type.startsWith('image/'))
+          ? `<div class="status-line ${preflightState.image_seats.length ? 'status-good' : 'status-warn'}">Image seats: ${escapeHtml((preflightState.image_seats || []).join(', ') || 'none')}</div>`
           : '';
 
         box.innerHTML = `
           <div class="preset-title ${statusClass}">${preflightState.ready ? 'Demo roster ready' : 'Demo roster blocked'}</div>
           <div class="status-line">Installed local models: ${escapeHtml((preflightState.installed || []).join(', ') || 'none detected')}</div>
           ${missingHtml}
-          ${visionHtml}
+          ${imageHtml}
           ${warningHtml || '<div class="status-line">No demo warnings for the current setup.</div>'}
         `;
       } catch (e) {
@@ -824,15 +1244,24 @@
       refreshPreflight();
     }
 
+    function removeFile(index) {
+      selectedFiles.splice(index, 1);
+      renderSelectedFiles();
+      refreshPreflight();
+    }
+
     function renderSelectedFiles() {
       const fileList = document.getElementById('fileList');
       if (!selectedFiles.length) {
         fileList.innerHTML = '';
         return;
       }
-      fileList.innerHTML = selectedFiles.map(file => {
+      fileList.innerHTML = selectedFiles.map((file, i) => {
         const sizeKb = Math.max(1, Math.round(file.size / 1024));
-        return `<div>${file.name} <span style="color:var(--warm)">(${sizeKb} KB)</span></div>`;
+        return `<div style="display:flex;align-items:center;gap:8px;">
+          <span>${file.name} <span style="color:var(--warm)">(${sizeKb} KB)</span></span>
+          <button onclick="removeFile(${i})" style="background:none;border:none;color:var(--warm);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;" title="Remove">×</button>
+        </div>`;
       }).join('');
     }
 
@@ -869,10 +1298,17 @@
     }
 
     renderSeats();
+    hydrateCloudKeys();
+    setTokenBudgetProfile('balanced');
     fetchDemoCatalog();
     loadHardwareDefaults();
     document.getElementById('attachmentInput').addEventListener('change', (event) => {
-      selectedFiles = Array.from(event.target.files || []);
+      const incoming = Array.from(event.target.files || []);
+      const existingNames = new Set(selectedFiles.map(f => f.name));
+      for (const f of incoming) {
+        if (!existingNames.has(f.name)) selectedFiles.push(f);
+      }
+      event.target.value = '';
       renderSelectedFiles();
       refreshPreflight();
     });
@@ -885,8 +1321,8 @@
       if (!preflightState || !preflightState.ready) {
         return alert('Demo preflight failed. Install the missing models or switch to a preset that matches your local setup.');
       }
-      if ((preflightState.warnings || []).some(item => item.includes('no seat is using a known vision-capable local model'))) {
-        return alert('You selected image attachments without a vision-capable seat. Switch to the Vision Review preset or change one model before launching.');
+      if ((preflightState.warnings || []).some(item => item.includes('no seat is using a known image-capable local model'))) {
+        return alert('You selected image attachments without an image-capable seat. Switch to the Image Review preset or change one model before launching.');
       }
 
       const btn = document.getElementById('launchBtn');
@@ -894,7 +1330,7 @@
       btn.disabled = true;
       btn.innerHTML = '> PROCESSING...';
 
-      panel.innerHTML = '';
+      renderLoadingState(panel, 'Starting council run...');
       rawCardContents = {};
       thinkingCards = {};
       chatHistory = [];
@@ -902,6 +1338,7 @@
       const formData = new FormData();
       formData.append('topic_text', topic);
       formData.append('council_config', JSON.stringify(councilConfig));
+      formData.append('token_budget_profile', tokenBudgetProfile);
       for (const file of selectedFiles) {
         formData.append('attachments', file);
       }
@@ -917,10 +1354,23 @@
       }
 
       try {
-        const resp = await fetch('/council/stream', { method: 'POST', body: formData });
+        const resp = await fetch('/council/stream', {
+          method: 'POST',
+          headers: cloudKeyHeaders(),
+          body: formData
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          const message = err.detail || err.message || `Request failed with status ${resp.status}`;
+          showToast(message);
+          renderErrorState(panel, message);
+          return;
+        }
+
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let sawDone = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -930,19 +1380,118 @@
           buffer = lines.pop();
           for (const line of lines) {
             if (line.startsWith('data: ')) {
-              try { handleEvent(JSON.parse(line.slice(6)), panel); } catch {}
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'done') sawDone = true;
+                handleEvent(ev, panel);
+              } catch {}
             }
           }
         }
+        if (!sawDone) {
+          showToast('The stream ended before the council reported completion.');
+        }
       } catch (err) {
-        panel.innerHTML += `<div style="color:var(--danger)">Error: ${err.message}</div>`;
+        showToast(err.message || 'SSE connection failed.');
+        renderErrorState(panel, err.message);
       }
       
       btn.disabled = false;
       btn.innerHTML = 'INITIALIZE COUNCIL';
     }
 
+    function toggleProjectReview() {
+      const section = document.getElementById('projectReviewSection');
+      section.style.display = section.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function launchProjectReview() {
+      const path = document.getElementById('projectPathInput').value.trim();
+      if (!path) return alert('Enter a project directory path.');
+
+      const btn = document.getElementById('projectReviewBtn');
+      const launchBtn = document.getElementById('launchBtn');
+      const panel = document.getElementById('councilPanel');
+      const infoDiv = document.getElementById('projectScanInfo');
+
+      btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      launchBtn.disabled = true;
+      renderLoadingState(panel, 'Scanning project and preparing review...');
+      rawCardContents = {};
+      thinkingCards = {};
+      chatHistory = [];
+      infoDiv.textContent = '';
+
+      try {
+        const resp = await fetch('/council/review-project', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...cloudKeyHeaders() },
+          body: JSON.stringify({
+            path,
+            deep_debate: document.getElementById('deepDebateToggle')?.checked || false,
+            council_config: councilConfig,
+            token_budget_profile: tokenBudgetProfile,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          const message = err.detail || 'Unknown error';
+          showToast(message);
+          renderErrorState(panel, message);
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let sawDone = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'done') sawDone = true;
+                if (ev.type === 'project_info') {
+                  infoDiv.textContent = `Scanning ${ev.total_files} files → reviewing ${ev.files_selected.length} core files`;
+                } else {
+                  handleEvent(ev, panel);
+                }
+              } catch {}
+            }
+          }
+        }
+        if (!sawDone) {
+          showToast('The project review stream ended before completion.');
+        }
+      } catch (err) {
+        showToast(err.message || 'Project review connection failed.');
+        renderErrorState(panel, err.message);
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Scan & Review';
+      launchBtn.disabled = false;
+    }
+
     function handleEvent(ev, panel) {
+      if (ev.type === 'error') {
+        const message = ev.message || 'The council run failed.';
+        showToast(message);
+        panel.appendChild(Object.assign(document.createElement('div'), {
+          className: 'status-card',
+          innerHTML: `<div class="preset-title status-bad">Runtime error</div><div class="status-line status-bad">${escapeHtml(message)}</div>`
+        }));
+        return;
+      }
+
       if (ev.type === 'warning') {
         const warning = document.createElement('div');
         warning.className = 'status-card';
@@ -996,10 +1545,10 @@
           if (!rawCardContents[key]) rawCardContents[key] = '';
           rawCardContents[key] += ev.chunk;
           if (ev.member !== 'chairman') {
-            body.innerHTML = marked.parse(rawCardContents[key]);
+            body.innerHTML = renderMarkdown(rawCardContents[key]);
           } else {
-            // While streaming Chairman JSON, just show the raw text safely
-            body.innerHTML = "<pre style='color:var(--muted); font-size:12px'>" + rawCardContents[key] + "</pre>";
+            // While streaming Chairman JSON, show escaped text in a wrapped pre block.
+            body.innerHTML = `<pre>${escapeHtml(rawCardContents[key])}</pre>`;
           }
         }
         return;
@@ -1020,17 +1569,18 @@
             if (data.risk_score >= 8) riskColor = "var(--danger)";
             else if (data.risk_score >= 5) riskColor = "var(--pink)";
 
+            const riskScore = escapeHtml(data.risk_score ?? '');
             let html = `
-              <h2>VERDICT: ${data.verdict}</h2>
-              <div style="font-size: 24px; color: ${riskColor}; font-family: 'Orbitron'; margin: 10px 0;">RISK SCORE: ${data.risk_score}/10</div>
+              <h2>VERDICT: ${escapeHtml(data.verdict || '')}</h2>
+              <div style="font-size: 24px; color: ${riskColor}; font-family: 'Orbitron'; margin: 10px 0;">RISK SCORE: ${riskScore}/10</div>
               <h3>Action Items:</h3>
-              <ul>${(data.action_items || []).map(a => `<li>${a}</li>`).join('')}</ul>
+              <ul>${(data.action_items || []).map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>
             `;
-            if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${c}</li>`).join('')}</ul>`;
-            if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${d}</li>`).join('')}</ul>`;
-            body.innerHTML = html;
+            if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
+            if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`;
+            body.innerHTML = sanitizeHtml(html);
           } catch (e) {
-            body.innerHTML = marked.parse(ev.full_text);
+            body.innerHTML = renderMarkdown(ev.full_text);
           }
         }
         return;
@@ -1110,11 +1660,12 @@
       try {
         const resp = await fetch('/council/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...cloudKeyHeaders() },
           body: JSON.stringify({
             member_id: targetId,
             messages: chatHistory,
-            council_config: councilConfig
+            council_config: councilConfig,
+            token_budget_profile: tokenBudgetProfile
           })
         });
 
@@ -1136,7 +1687,7 @@
                 const ev = JSON.parse(line.slice(6));
                 if (ev.type === 'chat_token') {
                   fullReply += ev.chunk;
-                  aMsg.innerHTML = marked.parse(fullReply);
+                  aMsg.innerHTML = renderMarkdown(fullReply);
                   historyDiv.scrollTop = historyDiv.scrollHeight;
                 }
               } catch {}
@@ -1176,6 +1727,120 @@
       a.href = url;
       a.download = `council_report_${Date.now()}.md`;
       a.click();
+    }
+
+    async function openReplayModal() {
+      const modal = document.getElementById('replayModal');
+      modal.style.display = 'flex';
+      await loadReplayRuns();
+    }
+
+    function closeReplayModal() {
+      document.getElementById('replayModal').style.display = 'none';
+    }
+
+    async function loadReplayRuns() {
+      const list = document.getElementById('replayRunList');
+      const detail = document.getElementById('replayRunDetail');
+      list.innerHTML = '<div class="replay-empty">Loading past runs...</div>';
+      detail.innerHTML = '<div class="replay-empty">Select a run to inspect its phases.</div>';
+
+      try {
+        const resp = await fetch('/runs?limit=25');
+        const data = await resp.json();
+        const runs = data.runs || [];
+        if (!runs.length) {
+          list.innerHTML = '<div class="replay-empty">No persisted runs yet.</div>';
+          return;
+        }
+
+        list.innerHTML = runs.map(run => {
+          const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
+          const topic = escapeHtml((run.topic || '').slice(0, 72) || 'Untitled run');
+          return `
+            <div class="replay-run-item" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
+              <div class="replay-run-title">${topic}</div>
+              <div class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</div>
+            </div>
+          `;
+        }).join('');
+
+        await loadReplayRunDetail(runs[0].run_id);
+      } catch (e) {
+        console.error('Failed to load replay runs', e);
+        list.innerHTML = '<div class="replay-empty">Failed to load persisted runs.</div>';
+      }
+    }
+
+    function formatReplayPhaseOutput(phase) {
+      if (phase.phase === 3 && phase.member_id === 'chairman') {
+        try {
+          const data = JSON.parse(phase.output || '{}');
+          return `
+            <h3>Verdict: ${escapeHtml(data.verdict || 'unknown')}</h3>
+            <p><strong>Risk score:</strong> ${escapeHtml(String(data.risk_score ?? 'n/a'))}</p>
+            <p><strong>Action items:</strong></p>
+            <ul>${(data.action_items || []).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+          `;
+        } catch (e) {
+          return renderMarkdown(phase.output || '');
+        }
+      }
+      return renderMarkdown(phase.output || '');
+    }
+
+    async function loadReplayRunDetail(runId) {
+      const detail = document.getElementById('replayRunDetail');
+      detail.innerHTML = '<div class="replay-empty">Loading run detail...</div>';
+
+      try {
+        const resp = await fetch(`/runs/${encodeURIComponent(runId)}`);
+        const run = await resp.json();
+        if (!run || !run.run_id) {
+          detail.innerHTML = '<div class="replay-empty">Run not found.</div>';
+          return;
+        }
+
+        const roster = run.roster || {};
+        const phases = run.phases || [];
+        const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
+        const finished = run.finished_at ? new Date(run.finished_at * 1000).toLocaleString() : 'in progress';
+        const chairmanPhase = phases.find(phase => phase.phase === 3 && phase.member_id === 'chairman');
+        let verdictSummary = '';
+        if (chairmanPhase) {
+          try {
+            const chairmanJson = JSON.parse(chairmanPhase.output || '{}');
+            verdictSummary = `<div class="status-card"><div class="preset-title">Chairman verdict</div><div class="status-line">${escapeHtml(chairmanJson.verdict || 'Unavailable')}</div></div>`;
+          } catch (e) {
+            verdictSummary = '';
+          }
+        }
+
+        detail.innerHTML = `
+          <div class="preset-title">${escapeHtml(run.topic || 'Untitled run')}</div>
+          <div class="replay-run-meta" style="margin-top:8px;">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}<br>finished: ${escapeHtml(finished)}</div>
+          ${verdictSummary}
+          ${phases.map(phase => {
+            const seat = roster[phase.member_id] || {};
+            const label = seat.label || phase.member_id;
+            const color = seat.color || 'var(--accent)';
+            const icon = seat.icon || '•';
+            return `
+              <div class="replay-phase">
+                <div class="replay-phase-head">
+                  <div class="replay-member" style="color:${escapeHtml(color)}">${escapeHtml(icon)} ${escapeHtml(label)}</div>
+                  <div class="replay-phase-meta">phase ${escapeHtml(String(phase.phase))} • ${escapeHtml(phase.member_id)}</div>
+                </div>
+                <div class="replay-phase-meta">finish_reason: ${escapeHtml(String(phase.finish_reason || 'n/a'))} • attempt: ${escapeHtml(String(phase.attempt_number || 1))}</div>
+                <div class="card-body" style="display:block; margin-top:10px;">${formatReplayPhaseOutput(phase)}</div>
+              </div>
+            `;
+          }).join('') || '<div class="replay-empty">No phase outputs stored for this run.</div>'}
+        `;
+      } catch (e) {
+        console.error('Failed to load replay detail', e);
+        detail.innerHTML = '<div class="replay-empty">Failed to load run detail.</div>';
+      }
     }
 
     // ── MEMORY GRAPH VISUALIZATION ──

@@ -1,17 +1,95 @@
 import re
 import json
+import os
+import socket
+import ipaddress
+from urllib.parse import urljoin, urlparse
+
 import httpx
 from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
 
+from logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 url_pattern = re.compile(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w.-]*')
 TEXT_CHAR_LIMIT = 12000
+MAX_FETCH_BYTES = 5 * 1024 * 1024
+MAX_REDIRECTS = 5
 
 
 def _truncate(value: str, limit: int = TEXT_CHAR_LIMIT) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "\n...[truncated]"
+
+
+def _is_safe_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname.lower() == "localhost":
+            return False
+
+        resolved = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+        if not resolved:
+            return False
+
+        for entry in resolved:
+            sockaddr = entry[4]
+            if not sockaddr:
+                return False
+            ip = ipaddress.ip_address(sockaddr[0])
+            if not ip.is_global:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+async def _fetch_url_bytes(client: httpx.AsyncClient, url: str) -> tuple[bytes, httpx.Headers, str] | None:
+    current_url = url
+    for _ in range(MAX_REDIRECTS + 1):
+        if not _is_safe_url(current_url):
+            logger.warning("url_fetch_blocked", extra={"url": current_url})
+            return None
+
+        async with client.stream("GET", current_url, follow_redirects=False) as resp:
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get("location")
+                if not location:
+                    resp.raise_for_status()
+                current_url = urljoin(str(resp.url), location)
+                continue
+
+            resp.raise_for_status()
+
+            content_length = resp.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > MAX_FETCH_BYTES:
+                        logger.warning("url_fetch_oversized", extra={"url": current_url, "content_length": int(content_length)})
+                        return None
+                except ValueError:
+                    pass
+
+            body = bytearray()
+            async for chunk in resp.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > MAX_FETCH_BYTES:
+                    logger.warning("url_fetch_aborted_oversized", extra={"url": current_url, "bytes": len(body)})
+                    return None
+
+            return bytes(body), resp.headers, current_url
+
+    logger.warning("url_fetch_redirect_limit", extra={"url": url, "max_redirects": MAX_REDIRECTS})
+    return None
 
 
 def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
@@ -95,33 +173,43 @@ async def parse_input(text: str) -> str:
     urls = url_pattern.findall(text)
     if not urls:
         return text
-    
+
+    if os.getenv("COUNCIL_ALLOW_URL_FETCH", "false").strip().lower() != "true":
+        logger.info("url_fetch_disabled")
+        return text
+
     scraped_data = []
-    for url in urls:
-        print(f"\n[🔍 I/O Parser] Scraping URL: {url}")
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, follow_redirects=True)
-                resp.raise_for_status()
-                
-                # Check if PDF
-                if url.lower().endswith(".pdf") or resp.headers.get("content-type", "").startswith("application/pdf"):
-                    print("[🔍 I/O Parser] Detected PDF document.")
-                    doc = fitz.open(stream=resp.content, filetype="pdf")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for url in urls:
+            if not _is_safe_url(url):
+                logger.warning("url_fetch_blocked", extra={"url": url})
+                continue
+
+            logger.info("url_fetch_started", extra={"url": url})
+            try:
+                fetched = await _fetch_url_bytes(client, url)
+                if not fetched:
+                    continue
+
+                body, headers, final_url = fetched
+
+                content_type = headers.get("content-type", "").lower()
+                if final_url.lower().endswith(".pdf") or content_type.startswith("application/pdf"):
+                    logger.info("url_fetch_pdf_detected", extra={"url": final_url})
+                    doc = fitz.open(stream=body, filetype="pdf")
                     pdf_text = ""
                     for page in doc:
                         pdf_text += page.get_text()
-                    scraped_data.append(f"--- CONTENT FROM {url} ---\n{pdf_text[:10000]}") # limit 10k chars
+                    scraped_data.append(f"--- CONTENT FROM {final_url} ---\n{pdf_text[:10000]}")
                 else:
-                    soup = BeautifulSoup(resp.content, "html.parser")
-                    # kill all script and style elements
+                    soup = BeautifulSoup(body, "html.parser")
                     for script in soup(["script", "style", "nav", "footer", "header"]):
                         script.extract()
                     page_text = soup.get_text(separator="\n", strip=True)
-                    scraped_data.append(f"--- CONTENT FROM {url} ---\n{page_text[:10000]}")
-        except Exception as e:
-            scraped_data.append(f"--- FAILED TO SCRAPE {url}: {str(e)} ---")
-            print(f"[❌ I/O Parser Failed]: {e}")
+                    scraped_data.append(f"--- CONTENT FROM {final_url} ---\n{page_text[:10000]}")
+            except Exception as e:
+                scraped_data.append(f"--- FAILED TO SCRAPE {url}: {str(e)} ---")
+                logger.exception("url_fetch_failed", extra={"url": url, "error": str(e)})
             
     if scraped_data:
         appended_text = "\n\n".join(scraped_data)
