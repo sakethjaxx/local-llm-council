@@ -1,0 +1,5 @@
+include presets.json
+include env.example
+recursive-include static *
+recursive-include demo_samples *
+recursive-include agent_prompts *

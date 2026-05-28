@@ -778,6 +778,10 @@ class CouncilOrchestrator:
             metrics_store.finish_run(run_id, status="failed", error=str(exc))
             await asyncio.to_thread(run_store.finish_run, run_id, "failed", str(exc))
             raise
+        finally:
+            from ollama_manager import unload_ollama_models
+            all_models = [c.get("model", "") for c in config.values()]
+            asyncio.create_task(unload_ollama_models(all_models))
 
     async def chat_with_member(
         self,
@@ -809,76 +813,80 @@ class CouncilOrchestrator:
         full_text = ""
         output_chars = 0
 
-        for attempt in range(max_retries):
-            started_at = time.perf_counter()
-            try:
-                resp = await litellm.acompletion(
-                    model=cfg["model"],
-                    messages=formatted_messages,
-                    max_tokens=self._token_budget["chat"],
-                    stream=True,
-                    **litellm_kwargs_for_model(cfg["model"]),
-                )
-                async for chunk in resp:
-                    text_chunk = chunk.choices[0].delta.content or ""
-                    if text_chunk:
-                        full_text += text_chunk
-                        output_chars += len(text_chunk)
-                        yield text_chunk
-                duration_ms = int((time.perf_counter() - started_at) * 1000)
-                metrics_store.record_llm_call(
-                    run_id=run_id,
-                    member_id=member_id,
-                    phase=None,
-                    model=cfg.get("model"),
-                    label=cfg.get("label"),
-                    attempt=attempt + 1,
-                    duration_ms=duration_ms,
-                    success=True,
-                    output_chars=output_chars,
-                )
-                await asyncio.to_thread(
-                    run_store.record_phase_output,
-                    run_id, 0, member_id, full_text,
-                    None, None,
-                    duration_ms,
-                )
-                metrics_store.finish_run(run_id, status="completed")
-                return
-            except Exception as e:
-                error_msg = str(e)
-                logger.warning(
-                    "chat_call_attempt_failed",
-                    extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "attempt": attempt + 1, "error": error_msg},
-                )
-                error_lower = error_msg.lower()
-                is_retryable = any(marker in error_lower for marker in [
-                    "timeout", "timed out", "rate limit", "service unavailable",
-                    "503", "502", "429", "connection", "reset by peer"
-                ])
-                is_permanent = any(marker in error_lower for marker in [
-                    "model not found", "not found", "invalid api key", "unauthorized",
-                    "401", "403", "no such model", "pull model"
-                ])
-                metrics_store.record_llm_call(
-                    run_id=run_id,
-                    member_id=member_id,
-                    phase=None,
-                    model=cfg.get("model"),
-                    label=cfg.get("label"),
-                    attempt=attempt + 1,
-                    duration_ms=int((time.perf_counter() - started_at) * 1000),
-                    success=False,
-                    error=error_msg,
-                )
-                if is_permanent or (not is_retryable and attempt > 0) or attempt >= max_retries - 1:
-                    logger.error(
-                        "chat_call_failed",
-                        extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "error": error_msg},
+        try:
+            for attempt in range(max_retries):
+                started_at = time.perf_counter()
+                try:
+                    resp = await litellm.acompletion(
+                        model=cfg["model"],
+                        messages=formatted_messages,
+                        max_tokens=self._token_budget["chat"],
+                        stream=True,
+                        **litellm_kwargs_for_model(cfg["model"]),
                     )
-                    metrics_store.finish_run(run_id, status="failed", error=error_msg)
-                    yield f"\n[Error connecting to {cfg['label']}: {error_msg}]"
+                    async for chunk in resp:
+                        text_chunk = chunk.choices[0].delta.content or ""
+                        if text_chunk:
+                            full_text += text_chunk
+                            output_chars += len(text_chunk)
+                            yield text_chunk
+                    duration_ms = int((time.perf_counter() - started_at) * 1000)
+                    metrics_store.record_llm_call(
+                        run_id=run_id,
+                        member_id=member_id,
+                        phase=None,
+                        model=cfg.get("model"),
+                        label=cfg.get("label"),
+                        attempt=attempt + 1,
+                        duration_ms=duration_ms,
+                        success=True,
+                        output_chars=output_chars,
+                    )
+                    await asyncio.to_thread(
+                        run_store.record_phase_output,
+                        run_id, 0, member_id, full_text,
+                        None, None,
+                        duration_ms,
+                    )
+                    metrics_store.finish_run(run_id, status="completed")
                     return
-                if is_retryable and attempt < max_retries - 1:
-                    backoff = (2 ** attempt) + random.uniform(0, 1)
-                    await asyncio.sleep(backoff)
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.warning(
+                        "chat_call_attempt_failed",
+                        extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "attempt": attempt + 1, "error": error_msg},
+                    )
+                    error_lower = error_msg.lower()
+                    is_retryable = any(marker in error_lower for marker in [
+                        "timeout", "timed out", "rate limit", "service unavailable",
+                        "503", "502", "429", "connection", "reset by peer"
+                    ])
+                    is_permanent = any(marker in error_lower for marker in [
+                        "model not found", "not found", "invalid api key", "unauthorized",
+                        "401", "403", "no such model", "pull model"
+                    ])
+                    metrics_store.record_llm_call(
+                        run_id=run_id,
+                        member_id=member_id,
+                        phase=None,
+                        model=cfg.get("model"),
+                        label=cfg.get("label"),
+                        attempt=attempt + 1,
+                        duration_ms=int((time.perf_counter() - started_at) * 1000),
+                        success=False,
+                        error=error_msg,
+                    )
+                    if is_permanent or (not is_retryable and attempt > 0) or attempt >= max_retries - 1:
+                        logger.error(
+                            "chat_call_failed",
+                            extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "error": error_msg},
+                        )
+                        metrics_store.finish_run(run_id, status="failed", error=error_msg)
+                        yield f"\n[Error connecting to {cfg['label']}: {error_msg}]"
+                        return
+                    if is_retryable and attempt < max_retries - 1:
+                        backoff = (2 ** attempt) + random.uniform(0, 1)
+                        await asyncio.sleep(backoff)
+        finally:
+            from ollama_manager import unload_ollama_models
+            asyncio.create_task(unload_ollama_models([cfg.get("model", "")]))

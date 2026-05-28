@@ -1,0 +1,48 @@
+name: "🐛 Bug Report"
+description: "File a bug report to help us improve Local LLM Council"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: describe-bug
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+      placeholder: E.g., when clicking "Run preset council" with gemma2:9b offline, the preflight loader hangs indefinitely...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Open Step 1 Context...
+        2. Set directory path to /nonexistent...
+        3. Click "Run council"...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+  - type: input
+    id: system-info
+    attributes:
+      label: System Environment Info
+      description: RAM size, OS version, Ollama version, Python version.
+      placeholder: e.g. macOS 14.5, 16GB RAM, Ollama 0.1.48, Python 3.12.3
+    validations:
+      required: true
+  - type: textarea
+    id: extra-context
+    attributes:
+      label: Additional Context
+      description: Add any other context or screenshots about the problem here.

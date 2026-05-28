@@ -1,0 +1,133 @@
+:root {
+  --bg: #f4f1ea;
+  --surface: rgba(255, 255, 255, 0.74);
+  --surface-hover: rgba(255, 255, 255, 0.92);
+  --surface-strong: #ffffff;
+  --border: rgba(43, 61, 53, 0.12);
+  --border-strong: rgba(43, 61, 53, 0.24);
+  --text: #1f2823;
+  --muted: #58635d;
+  --accent: #2f5d50;
+  --accent-soft: #dde7e1;
+  --warm: #73552f;
+  --danger: #9f3d32;
+  --chairman: #9c7a4d;
+  --glass: blur(16px);
+  --shadow: 0 18px 48px rgba(42, 52, 45, 0.08);
+  --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(214, 225, 218, 0.5), transparent 40%),
+    radial-gradient(circle at bottom right, rgba(230, 223, 207, 0.55), transparent 40%),
+    linear-gradient(180deg, #f7f4ee 0%, #efebe3 100%);
+  color: var(--text);
+  font-family: 'IBM Plex Sans', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Base subtle grid background overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(47, 93, 80, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 93, 80, 0.02) 1px, transparent 1px);
+  background-size: 64px 64px;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.6;
+}
+
+/* Ambient glow - single subtle back layer for visual polish */
+.ambient-glow {
+  position: fixed;
+  top: -10vw;
+  right: -10vw;
+  width: 40vw;
+  height: 40vw;
+  background: radial-gradient(circle, rgba(117, 147, 134, 0.12) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: -1;
+  filter: blur(80px);
+}
+
+header {
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(247, 244, 238, 0.78);
+  backdrop-filter: var(--glass);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo-mark {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  letter-spacing: 0.06em;
+}
+
+.title-group h1 {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.title-group p {
+  font-family: 'Instrument Serif', serif;
+  font-size: 15px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 390px 1fr;
+  flex: 1;
+}
+
+/* Custom modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(47, 93, 80, 0.18);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(47, 93, 80, 0.3);
+}

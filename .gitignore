@@ -7,6 +7,7 @@ council_metrics.jsonl
 council_memory.json
 council_runs.db
 council_runs.db-*
+demo_export.md
 project_code_graph.json
 project_code_graph.graphml
 .code-review-graph/

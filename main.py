@@ -201,13 +201,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/demo-samples", StaticFiles(directory="demo_samples"), name="demo-samples")
+BASE_DIR = pathlib.Path(__file__).parent.resolve()
+
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+app.mount("/demo-samples", StaticFiles(directory=str(BASE_DIR / "demo_samples")), name="demo-samples")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    with open("static/index.html") as f:
+    with open(BASE_DIR / "static/index.html") as f:
         return f.read()
 
 

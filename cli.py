@@ -61,6 +61,24 @@ async def main():
         except Exception:
             logger.warning("chairman_json_parse_failed_allowing_commit", exc_info=True)
             sys.exit(0)
+            
+    elif len(sys.argv) > 1 and sys.argv[1] == "start":
+        import uvicorn
+        import os
+        host = os.getenv("COUNCIL_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        port = int(os.getenv("COUNCIL_PORT", "8765"))
+        logger.info(f"starting_llm_council_server on {host}:{port}")
+        uvicorn.run("main:app", host=host, port=port, reload=False)
+        
+    else:
+        print("Usage: local-llm-council [start | check_diff]")
+        print("  start      - Launch the Local LLM Council web interface")
+        print("  check_diff - Run as a git pre-commit hook")
+        sys.exit(1)
+
+def run_cli():
+    asyncio.run(main())
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run_cli()
