@@ -1,0 +1,3 @@
+[console_scripts]
+council = cli:run_cli
+llm-council = cli:run_cli

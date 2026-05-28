@@ -1,5 +1,9 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "llm-council"
+name = "local-llm-council"
 version = "0.1.0"
 description = "Local-first multi-model AI council"
 requires-python = ">=3.12"
@@ -23,7 +27,21 @@ dependencies = [
   "numpy==2.4.4",
   "psutil==7.2.2",
   "sentence-transformers==5.4.1",
+  "tiktoken==0.12.0",
 ]
 
 [project.scripts]
-council = "cli:main"
+llm-council = "cli:run_cli"
+council = "cli:run_cli"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["static", "demo_samples", "agent_prompts"]
+py-modules = [
+  "main", "cli", "budget_profiles", "cloud_keys", "demo_catalog",
+  "embeddings", "hardware_detect", "io_parser", "logging_utils",
+  "memory_graph", "memory_store", "metrics_store", "ollama_manager",
+  "orchestrator", "project_fingerprint", "project_graph", "provider_caps",
+  "router_agent", "run_store", "search_engine", "shutdown_state",
+  "skill_registry", "smart_phase", "summarizer", "tool_repl"
+]

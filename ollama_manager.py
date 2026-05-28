@@ -119,3 +119,34 @@ def ensure_models_for_config(config: dict, auto_pull: bool = False) -> dict:
 
 def auto_pull_enabled() -> bool:
     return os.getenv("COUNCIL_BOOTSTRAP_LOCAL_MODELS", "false").lower() == "true"
+
+
+async def unload_ollama_models(models: Iterable[str]) -> None:
+    """
+    Unloads the specified Ollama models from memory to free up VRAM/RAM.
+    This is done by sending a keep_alive=0 request to the generate API.
+    """
+    import httpx
+    import asyncio
+    
+    async def _unload(tag: str):
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={"model": tag, "keep_alive": 0}
+                )
+        except Exception:
+            pass
+
+    tasks = []
+    seen = set()
+    for model in models:
+        if caps_for(model)[1].provider == "ollama":
+            tag = _ollama_tag(model)
+            if tag not in seen:
+                seen.add(tag)
+                tasks.append(_unload(tag))
+    
+    if tasks:
+        await asyncio.gather(*tasks)
