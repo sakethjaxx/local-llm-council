@@ -25,7 +25,7 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | `main.py` | FastAPI app, all HTTP endpoints |
 | `router_agent.py` | Dynamic Swarm — LLM generates roster personas |
 | `smart_phase.py` | MiniLM cosine similarity → skip Phase 2 if unanimous |
-| `memory_graph.py` | NetworkX triple store, keyword retrieval (upgrading to SQLite+vectors) |
+| `memory_store.py` | SQLite+vector memory store (replaced memory_graph.py) |
 | `provider_caps.py` | Model capability registry — vision, context window, cost, response_format |
 | `run_store.py` | SQLite persistence for runs, phase outputs, feedback |
 | `metrics_store.py` | JSONL metrics (latency, status) — thin wrapper over run_store eventually |
@@ -37,7 +37,7 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | `project_graph.py` | AST-based project dependency graph |
 | `demo_catalog.py` | Preset council configurations for demos |
 | `demo_samples/` | Sample input files for demo presets |
-| `static/index.html` | Full frontend (~1300 lines, HTML/CSS/JS co-located) |
+| `static/index.html` | Full frontend (~1920 lines, HTML/CSS/JS co-located) |
 
 ## Architecture: 3-Phase Pipeline
 
@@ -99,7 +99,7 @@ Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-ph
 
 | Var | Default | Purpose |
 |---|---|---|
-| `COUNCIL_CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `COUNCIL_CORS_ORIGINS` | `localhost:8765` | Allowed CORS origins — empty = localhost only, `*` = wildcard |
 | `COUNCIL_ENABLE_PYTHON_TOOL` | `true` | Enable Python REPL tool for cloud models |
 | `COUNCIL_METRICS_FILE` | `council_metrics.jsonl` | JSONL metrics output path |
 | `COUNCIL_MAX_RECENT_RUNS` | `20` | Max runs returned by metrics endpoint |
@@ -118,4 +118,4 @@ Current: 30 tests passing. Tests use unittest stubs for litellm and httpx.
 - Do not use `os.walk` + AST parsing in `blast_radius.py` — import from `project_graph.py`
 - Do not add new columns to SQLite tables without a migration path
 - Do not grow `index.html` further before extracting config to `presets.json`
-- Do not modify `memory_graph.py` during Phase 1 or Phase 1.5 — Phase 2 intentionally replaces it with `memory_store.py`
+- `memory_graph.py` has been deleted — use `memory_store.py` exclusively
