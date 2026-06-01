@@ -4,6 +4,9 @@
 [![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](https://img.shields.io/badge/license-MIT-green)
 [![Runtime](https://img.shields.io/badge/runtime-local--first-informational?style=for-the-badge)](https://img.shields.io/badge/runtime-local--first-informational)
 [![Telemetry](https://img.shields.io/badge/telemetry-zero-success?style=for-the-badge)](https://img.shields.io/badge/telemetry-zero-success)
+[![Tests](https://github.com/sakethjaxx/local-llm-council/actions/workflows/test.yml/badge.svg)](https://github.com/sakethjaxx/local-llm-council/actions/workflows/test.yml)
+
+![LLM Council UI](docs/assets/screenshot.png)
 
 An elegant, **local-first multi-model review council** that runs several local or optional cloud LLMs as a structured review board. Your code, topics, and files stay on your machine—never sent to third-party hosted orchestrators.
 
