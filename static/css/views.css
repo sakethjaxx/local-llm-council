@@ -517,3 +517,41 @@
     width: 100%;
   }
 }
+
+/* --- EMPTY STATE --- */
+.empty-title {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 20px;
+  color: var(--text);
+  font-weight: 650;
+}
+.empty-subtitle {
+  max-width: 400px;
+  margin-bottom: 20px;
+}
+.preset-section-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 6px;
+  width: 100%;
+  max-width: 800px;
+  text-align: left;
+}
+.recent-runs-container {
+  width: 100%;
+  max-width: 800px;
+  margin-top: 28px;
+  text-align: left;
+}
+.recent-runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.recent-runs-header {
+  margin-bottom: 12px;
+}
