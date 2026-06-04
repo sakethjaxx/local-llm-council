@@ -7,11 +7,11 @@
   <title>LLM Council - Project Review</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  
+
   <!-- CDNs with defer, vis-network loaded dynamically on demand in JS -->
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous" defer></script>
-  
+
   <link rel="stylesheet" href="/static/css/base.css">
   <link rel="stylesheet" href="/static/css/components.css">
   <link rel="stylesheet" href="/static/css/views.css">
@@ -31,11 +31,11 @@
   <main>
     <!-- LEFT PANEL: CONFIG -->
     <aside class="config-panel">
-      
+
       <!-- STEP 1: CONTEXT -->
       <section>
         <div class="section-title">Step 1: Context &amp; Source</div>
-        
+
         <div class="tab-group" role="tablist">
           <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="textTabContent" id="textTab" data-action="switch-tab" data-tab="text">
             ✍️ Text &amp; Files
@@ -46,86 +46,82 @@
         </div>
 
         <div id="textTabContent" class="tab-content">
-          <label for="topicText" class="visually-hidden" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;">Council topic brief</label>
+          <label for="topicText" class="visually-hidden">Council topic brief</label>
           <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or a focused review request..."></textarea>
-          
+
           <div class="helper-copy">Attach code files, markdown, or photos (sent as visual inputs for image-capable models).</div>
-          
-          <label for="attachmentInput" class="visually-hidden" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;">Attach files</label>
+
+          <label for="attachmentInput" class="visually-hidden">Attach files</label>
           <input type="file" id="attachmentInput" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
           <div class="file-list" id="fileList"></div>
         </div>
 
         <div id="projectTabContent" class="tab-content" style="display: none;">
-          <div class="helper-copy" style="margin-bottom: 8px;">Enter the absolute path to a local project directory. The council will scan its structure, identify core connected files, and execute a comprehensive review.</div>
-          <label for="projectPathInput" class="visually-hidden" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;">Local directory path</label>
+          <div class="helper-copy">Enter the absolute path to a local project directory. The council will scan its structure, identify core connected files, and execute a comprehensive review.</div>
+          <label for="projectPathInput" class="visually-hidden">Local directory path</label>
           <input type="text" id="projectPathInput" placeholder="/Users/you/projects/my-app">
-          <div id="projectScanInfo" style="margin-top: 8px; font-size: 11.5px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
+          <div id="projectScanInfo" class="scan-info"></div>
         </div>
       </section>
 
       <!-- STEP 2: COUNCIL -->
       <section>
         <div class="section-title">Step 2: Council Setup</div>
-        
-        <!-- Environment Indicator badge -->
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-          <span style="font-size:11.5px; color:var(--muted); font-weight:500;">Environment Preflight</span>
-          <button class="btn btn-small" data-action="refresh-preflight" style="padding: 2px 6px; font-size:9.5px;">Refresh checks</button>
+
+        <div class="section-row section-row--mb10">
+          <span class="section-sublabel section-sublabel--flush">Environment Preflight</span>
+          <button class="btn btn-small btn-mini" data-action="refresh-preflight">Refresh checks</button>
         </div>
-        
-        <!-- Preflight status box (collapsible when green/ready) -->
+
         <div class="status-card" id="preflightBox">
           <div class="status-line">Checking local Ollama models...</div>
         </div>
 
-        <div style="margin-top: 14px;">
-          <span style="font-size:11.5px; color:var(--muted); font-weight:500; display:block; margin-bottom:6px;">Model Profile</span>
-          <div class="tab-group" style="background: rgba(255,255,255,0.4); border: 1px solid var(--border);" role="group">
+        <div class="setting-block">
+          <span class="section-sublabel">Model Profile</span>
+          <div class="tab-group tab-group--surface" role="group">
             <button class="tab-btn" data-action="apply-profile" data-profile="turbo">Turbo</button>
             <button class="tab-btn active" data-action="apply-profile" data-profile="balanced">Balanced</button>
             <button class="tab-btn" data-action="apply-profile" data-profile="quality">Quality</button>
           </div>
         </div>
 
-        <!-- Active Council Summary Display -->
-        <div style="margin-top: 12px;">
-          <span style="font-size:11.5px; color:var(--muted); font-weight:500; display:block; margin-bottom:6px;">Active Council Roster</span>
+        <div class="setting-block setting-block--sm">
+          <span class="section-sublabel">Active Council Roster</span>
           <div class="active-roster-overview" id="activeRosterOverview">
             <!-- Populated via JS -->
           </div>
         </div>
 
-        <!-- Advanced Settings Toggle Accordion -->
-        <div style="margin-top: 14px;">
+        <div class="setting-block">
           <button class="advanced-toggle-btn" aria-expanded="false" aria-controls="advancedSection" data-action="toggle-advanced" id="advancedToggleBtn">
             ⚙️ Show Advanced Settings
           </button>
           <div class="advanced-section" id="advancedSection" role="region">
-            
+
             <div>
-              <span style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.04em;">Debate Features</span>
-              <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
-                <label style="color:var(--text); font-size: 12.5px; cursor:pointer; display:flex; align-items:center; gap:6px;">
+              <span class="section-label">Debate Features</span>
+              <div class="checkbox-group">
+                <label class="checkbox-label">
                   <input type="checkbox" id="dynamicSwarmToggle"> 🌀 Dynamic Swarm Routing
                 </label>
-                <label style="color:var(--text); font-size: 12.5px; cursor:pointer; display:flex; align-items:center; gap:6px;">
+                <label class="checkbox-label">
                   <input type="checkbox" id="deepDebateToggle"> ⚖️ Deep Debate (Bypass Fast Mode)
                 </label>
               </div>
             </div>
 
             <div>
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.04em;">Hardware Tuning</span>
-                <button class="btn btn-small" data-action="auto-tune" style="padding: 2px 6px;">Auto-tune config</button>
+              <div class="section-row">
+                <span class="section-label">Hardware Tuning</span>
+                <button class="btn btn-small btn-mini" data-action="auto-tune">Auto-tune config</button>
               </div>
               <div class="helper-copy">Automatically scans local RAM &amp; CPU/GPU, recommending optimized models.</div>
             </div>
 
             <div>
-              <span style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.04em;">Token Budget Profile</span>
-              <div class="tab-group" style="background:rgba(0,0,0,0.03); margin-top:6px; margin-bottom:4px;" role="group">
+              <span class="section-label">Token Budget Profile</span>
+              <div class="tab-group tab-group--dim" role="group">
                 <button class="tab-btn" data-action="apply-budget" data-budget="economy">Economy</button>
                 <button class="tab-btn active" data-action="apply-budget" data-budget="balanced">Balanced</button>
                 <button class="tab-btn" data-action="apply-budget" data-budget="performance">Performance</button>
@@ -133,11 +129,10 @@
               <div class="helper-copy" id="tokenBudgetSummary">Standard token budget profile.</div>
             </div>
 
-            <!-- Cloud Keys Toggle -->
             <div>
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <span style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.04em;">🔑 Cloud Provider Keys</span>
-                <button class="btn btn-small" data-action="clear-keys" style="padding:2px 6px; font-size:9.5px;">Clear keys</button>
+              <div class="section-row section-row--mb6">
+                <span class="section-label">🔑 Cloud Provider Keys</span>
+                <button class="btn btn-small btn-mini" data-action="clear-keys">Clear keys</button>
               </div>
               <div class="cloud-key-grid">
                 <div class="cloud-key-row">
@@ -161,8 +156,8 @@
             </div>
 
             <div>
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.04em;">Manual Seat Customization</span>
+              <div class="section-row section-row--mb8">
+                <span class="section-label">Manual Seat Customization</span>
                 <button class="btn btn-small" data-action="add-seat">Add Seat</button>
               </div>
               <div class="seat-list" id="seatList">
@@ -177,17 +172,17 @@
       <!-- STEP 3: RUN -->
       <section>
         <div class="section-title">Step 3: Execution</div>
-        <button class="btn btn-solid" id="launchBtn" data-action="launch-council" style="font-size: 15px; padding: 14px; width: 100%; margin-top: 10px;">
+        <button class="btn btn-solid btn-launch" id="launchBtn" data-action="launch-council">
           Run council
         </button>
       </section>
 
-      <!-- SIDEBAR TOOLS (Replaced Header Modals) -->
-      <section style="margin-top: auto; border-top: 1px solid var(--border); padding-top: 16px;">
-        <div style="display:flex; gap: 8px; justify-content: space-between;">
-          <button class="btn btn-small" data-action="open-replay" style="flex:1;">📂 Replays</button>
-          <button class="btn btn-small" data-action="view-code-graph" style="flex:1;">🕸️ Code Graph</button>
-          <button class="btn btn-small" data-action="view-memory-graph" style="flex:1;">🧠 Memory Graph</button>
+      <!-- SIDEBAR TOOLS -->
+      <section class="sidebar-tools">
+        <div class="sidebar-tools-row">
+          <button class="btn btn-small btn-flex" data-action="open-replay">📂 Replays</button>
+          <button class="btn btn-small btn-flex" data-action="view-code-graph">🕸️ Code Graph</button>
+          <button class="btn btn-small btn-flex" data-action="view-memory-graph">🧠 Memory Graph</button>
         </div>
       </section>
 
@@ -196,20 +191,18 @@
     <!-- RIGHT PANEL: OUTPUT -->
     <section class="council-panel" id="councilPanel">
       <div class="panel-empty" id="panelEmpty">
-        <h2 style="font-family: 'IBM Plex Sans', sans-serif; font-size: 20px; color: var(--text); font-weight:650;">No Active Council Run</h2>
-        <div class="helper-copy" style="max-width:400px; margin-bottom: 20px;">Ready for a project brief. Select one of our recommended demo presets below to load a full context, or switch tabs to type a manual brief and click "Run council".</div>
-        
-        <!-- Preset Cards dashboard (Empty state CTA) -->
-        <h3 style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px dashed var(--border); padding-bottom: 6px; width: 100%; max-width: 800px; text-align: left;">Recommended Demo Presets</h3>
-        
+        <h2 class="empty-title">No Active Council Run</h2>
+        <div class="helper-copy empty-subtitle">Ready for a project brief. Select one of our recommended demo presets below to load a full context, or switch tabs to type a manual brief and click "Run council".</div>
+
+        <h3 class="preset-section-label">Recommended Demo Presets</h3>
+
         <div class="preset-dashboard" id="presetGrid">
           <!-- Loaded via JS dynamically -->
         </div>
 
-        <!-- Recent Runs Summary (Empty State List) -->
-        <div id="recentRunsContainer" style="width: 100%; max-width: 800px; margin-top: 28px; text-align: left; display: none;">
-          <h3 style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px dashed var(--border); padding-bottom: 6px; margin-bottom: 12px; width: 100%;">Recent Council Runs</h3>
-          <div id="recentRunsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        <div id="recentRunsContainer" class="recent-runs-container" style="display: none;">
+          <h3 class="preset-section-label recent-runs-header">Recent Council Runs</h3>
+          <div id="recentRunsList" class="recent-runs-list"></div>
         </div>
       </div>
     </section>
@@ -222,7 +215,7 @@
         <span id="commonModalTitle">Modal View</span>
         <button class="btn btn-small" data-action="close-modal" aria-label="Close" id="modalCloseBtn">✕</button>
       </div>
-      <div id="commonModalBody" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0;">
+      <div id="commonModalBody">
         <!-- Injected dynamically via JavaScript -->
       </div>
     </div>
