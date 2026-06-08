@@ -10,6 +10,53 @@ from logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+
+def _preflight_check() -> None:
+    from ollama_manager import is_ollama_available, get_missing_models, pull_model, auto_pull_enabled
+    from hardware_detect import get_hardware_suggestion
+
+    print("\n── LLM Council Preflight ──────────────────")
+
+    if not is_ollama_available():
+        print("✗ Ollama not found.")
+        print("  Install: https://ollama.ai  then re-run 'local-llm-council start'")
+        sys.exit(1)
+    print("✓ Ollama found")
+
+    hw = get_hardware_suggestion()
+    print(f"✓ Hardware: {hw['ram_gb']}GB RAM → {hw['tier_name']}")
+
+    missing = get_missing_models(hw["config"])
+    if not missing:
+        print("✓ All required models present")
+    else:
+        print(f"\n  Missing models ({len(missing)}):")
+        for m in missing:
+            print(f"    • {m}")
+
+        if auto_pull_enabled():
+            answer = "y"
+        else:
+            try:
+                answer = input(f"\n  Pull {len(missing)} model(s) now? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = "n"
+
+        if answer in ("", "y", "yes"):
+            for model in missing:
+                print(f"  Pulling {model}...")
+                result = pull_model(model)
+                if result["success"]:
+                    print(f"  ✓ {model} ready")
+                else:
+                    print(f"  ✗ Failed: {result['stderr'][:200]}")
+                    print(f"    Run manually: ollama pull {model}")
+        else:
+            print("\n  ⚠ Skipping pull. Council may fail if models are missing.")
+
+    print("───────────────────────────────────────────\n")
+
+
 async def main():
     if len(sys.argv) > 1 and sys.argv[1] == "check_diff":
         logger.info("precommit_hook_started")
@@ -65,6 +112,7 @@ async def main():
     elif len(sys.argv) > 1 and sys.argv[1] == "start":
         import uvicorn
         import os
+        _preflight_check()
         host = os.getenv("COUNCIL_HOST", "127.0.0.1").strip() or "127.0.0.1"
         port = int(os.getenv("COUNCIL_PORT", "8765"))
         logger.info(f"starting_llm_council_server on {host}:{port}")
