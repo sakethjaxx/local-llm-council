@@ -23,6 +23,21 @@ def _iter_ollama_models(config: dict) -> Iterable[str]:
                 yield tag
 
 
+def is_ollama_available() -> bool:
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
 def get_installed_models() -> list[str]:
     try:
         result = subprocess.run(
