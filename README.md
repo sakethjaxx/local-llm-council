@@ -34,14 +34,28 @@ Unlike modern AI developer utilities, **Local LLM Council** is designed with pri
 
 ## 🚀 Quick Start
 
-### 1. The Developer Route (PyPI Package)
+### 1. One-Line Install (Recommended)
+Installs Python package + Ollama (if missing) in one step:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sakethjaxx/local-llm-council/main/install.sh | bash
+```
+
+Then:
+
+```bash
+local-llm-council start
+```
+
+Open `http://localhost:8765`. On first launch, the CLI detects your RAM tier, lists missing models, and offers to pull them automatically.
+
+---
+
+### 2. The Developer Route (PyPI Package)
 If you have Python installed, you can install the CLI globally or in an environment:
 
 ```bash
-# Install the package
 pip install local-llm-council
-
-# Launch the UI
 local-llm-council start
 ```
 
@@ -49,7 +63,7 @@ Open `http://localhost:8765` in your browser.
 
 ---
 
-### 2. The Universal Route (Docker)
+### 3. The Universal Route (Docker)
 If you prefer a clean containerized sandbox process without installing Python:
 
 ```bash
@@ -63,7 +77,7 @@ docker run --rm -p 8765:8765 ghcr.io/sakethjaxx/local-llm-council:latest
 
 ---
 
-### 3. Local Source Installation
+### 4. Local Source Installation
 For contributors or running from source:
 
 ```bash
