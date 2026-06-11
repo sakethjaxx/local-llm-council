@@ -1,0 +1,71 @@
+[
+  {
+    "name": "fast_triage",
+    "status": "blocked",
+    "preflight": {
+      "provider": "ollama",
+      "required": [
+        "qwen2.5:7b",
+        "gemma2:9b",
+        "llama3.1:8b"
+      ],
+      "installed": [],
+      "missing": [
+        "qwen2.5:7b",
+        "gemma2:9b",
+        "llama3.1:8b"
+      ],
+      "pulled": [],
+      "ready": false,
+      "auto_pull_enabled": false,
+      "warnings": [],
+      "image_seats": []
+    }
+  },
+  {
+    "name": "code_review",
+    "status": "blocked",
+    "preflight": {
+      "provider": "ollama",
+      "required": [
+        "qwen2.5:7b",
+        "llama3.1:8b",
+        "gemma2:9b"
+      ],
+      "installed": [],
+      "missing": [
+        "qwen2.5:7b",
+        "llama3.1:8b",
+        "gemma2:9b"
+      ],
+      "pulled": [],
+      "ready": false,
+      "auto_pull_enabled": false,
+      "warnings": [],
+      "image_seats": []
+    }
+  },
+  {
+    "name": "product_review",
+    "status": "blocked",
+    "preflight": {
+      "provider": "ollama",
+      "required": [
+        "qwen2.5:7b",
+        "gemma2:9b",
+        "llama3.1:8b"
+      ],
+      "installed": [],
+      "missing": [
+        "qwen2.5:7b",
+        "gemma2:9b",
+        "llama3.1:8b"
+      ],
+      "pulled": [],
+      "ready": false,
+      "auto_pull_enabled": false,
+      "warnings": [],
+      "image_seats": []
+    }
+  }
+]
