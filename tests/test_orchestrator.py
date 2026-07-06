@@ -18,7 +18,14 @@ if "litellm" not in sys.modules:
     litellm_stub.acompletion = _unused_acompletion
     sys.modules["litellm"] = litellm_stub
 
-from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG, _count_tokens, _specificity_score, parse_chairman_response
+from orchestrator import (
+    CouncilOrchestrator,
+    DEFAULT_MEMBER_CONFIG,
+    _count_tokens,
+    _grounding_ratio,
+    _specificity_score,
+    parse_chairman_response,
+)
 from run_store import RunStore
 
 
@@ -176,7 +183,11 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         phase_labels = [event["label"] for event in events if event["type"] == "phase_start"]
         self.assertEqual(
             phase_labels,
-            ["Independent Analysis", "Cross-Review (Bypassed - Fast Mode)", "Chairman's Verdict"],
+            [
+                "Independent Analysis",
+                "Cross-Review (Skipped — Fast mode: no debate. Enable Deep Debate for cross-examination.)",
+                "Chairman's Verdict",
+            ],
         )
         self.assertEqual(events[-1]["type"], "done")
         self.assertEqual(
@@ -206,7 +217,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
              patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
              patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
              patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
-             patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42)), \
+             patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42, {"reason": "stub", "stances": {}, "split": False})), \
              patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
             events = [event async for event in orchestrator.run("debate this", None, deep_debate=True, run_id="debate-run")]
 
@@ -218,6 +229,137 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         phase_two_calls = [call for call in phases if call[1] == 2]
         self.assertEqual(len(phase_two_calls), 3)
         self.assertEqual(events[-1]["type"], "done")
+
+    async def test_run_split_stances_trigger_rebuttal_round(self):
+        orchestrator = CouncilOrchestrator()
+        phases = []
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            phases.append((member_id, phase))
+            await queue.put({"type": "member_done", "member": member_id, "full_text": f"{member_id}-phase-{phase}"})
+            return f"{member_id}-phase-{phase}"
+
+        split_info = {
+            "reason": "Stances split (architect=PROCEED, security=HOLD)",
+            "stances": {"architect": {"verdict": "PROCEED", "confidence": 8, "summary": ""}},
+            "split": True,
+        }
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.3, split_info)), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("contested topic", None, deep_debate=True, run_id="rebuttal-run")]
+
+        phase_two_calls = [call for call in phases if call[1] == 2]
+        # 3 cross-reviews + 3 rebuttals, one bounded round
+        self.assertEqual(len(phase_two_calls), 6)
+        self.assertEqual(len([e for e in events if e["type"] == "rebuttal_start"]), 1)
+        decision_events = [e for e in events if e["type"] == "smart_phase_decision"]
+        self.assertEqual(len(decision_events), 1)
+        self.assertTrue(decision_events[0]["split"])
+        self.assertIn("split", decision_events[0]["reason"].lower())
+        self.assertEqual(events[-1]["type"], "done")
+
+    async def test_run_unanimous_stances_skip_debate_without_rebuttal(self):
+        orchestrator = CouncilOrchestrator()
+        phases = []
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            phases.append((member_id, phase))
+            await queue.put({"type": "member_done", "member": member_id, "full_text": f"{member_id}-phase-{phase}"})
+            return f"{member_id}-phase-{phase}"
+
+        unanimous_info = {
+            "reason": "All 3 members independently reached PROCEED",
+            "stances": {},
+            "split": False,
+        }
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch("orchestrator.smart_phase.should_skip", return_value=(True, 0.95, unanimous_info)), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("agreed topic", None, deep_debate=True, run_id="skip-run")]
+
+        phase_two_calls = [call for call in phases if call[1] == 2]
+        self.assertEqual(len(phase_two_calls), 0)
+        self.assertEqual(len([e for e in events if e["type"] == "rebuttal_start"]), 0)
+        skip_labels = [e["label"] for e in events if e["type"] == "phase_start" and e["phase"] == 2]
+        self.assertIn("PROCEED", skip_labels[0])
+        self.assertEqual(events[-1]["type"], "done")
+
+    async def test_run_warns_when_all_seats_share_one_model(self):
+        orchestrator = CouncilOrchestrator()
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            await queue.put({"type": "member_done", "member": member_id, "full_text": f"{member_id}-out"})
+            return f"{member_id}-out"
+
+        clone_config = {
+            "a": {"label": "Seat A", "model": "ollama/qwen2.5:7b", "persona": "a"},
+            "b": {"label": "Seat B", "model": "ollama/qwen2.5:7b", "persona": "b"},
+            "c": {"label": "Seat C", "model": "ollama/qwen2.5:7b", "persona": "c"},
+            "chairman": {"label": "Chairman", "model": "ollama/qwen2.5:7b", "persona": "chair"},
+        }
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [
+                event
+                async for event in orchestrator.run(
+                    "clone check", None, custom_config=clone_config, deep_debate=False, run_id="clone-run"
+                )
+            ]
+
+        clone_warnings = [e for e in events if e["type"] == "warning" and "same model" in e.get("message", "")]
+        self.assertEqual(len(clone_warnings), 1)
+        self.assertIn("ollama/qwen2.5:7b", clone_warnings[0]["message"])
+
+    async def test_run_yields_chairman_member_done_with_full_text(self):
+        orchestrator = CouncilOrchestrator()
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            text = '{"verdict":"ship"}' if member_id == "chairman" else f"{member_id}-out"
+            await queue.put({"type": "member_done", "member": member_id, "full_text": text})
+            return text
+
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("verdict check", None, deep_debate=False, run_id="done-run")]
+
+        chairman_done = [e for e in events if e["type"] == "member_done" and e["member"] == "chairman"]
+        self.assertEqual(len(chairman_done), 1)
+        self.assertEqual(chairman_done[0]["full_text"], '{"verdict":"ship"}')
+
+    def test_grounding_ratio_counts_labeled_points(self):
+        result = {
+            "consensus": [
+                "(Lead Architect, Security Auditor) Both flag the missing auth check",
+                "Everyone loves the new cache",  # ungrounded — no member named
+            ],
+            "disputes": ["(Lead Architect vs Perf Engineer) Disagree on batching"],
+        }
+        ratio = _grounding_ratio(result, ["Lead Architect", "Security Auditor", "Perf Engineer"])
+        self.assertEqual(ratio, round(2 / 3, 3))
+
+    def test_grounding_ratio_none_without_points(self):
+        self.assertIsNone(_grounding_ratio({"consensus": [], "disputes": []}, ["A"]))
 
     async def test_member_review_caps_total_prompt_budget(self):
         orchestrator = CouncilOrchestrator()
@@ -287,7 +429,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
              patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
              patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
              patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
-             patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42)), \
+             patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42, {"reason": "stub", "stances": {}, "split": False})), \
              patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
             events = [
                 event
@@ -394,7 +536,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
                  patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
                  patch("orchestrator.skill_registry.extract_skills", side_effect=_noop_async), \
                  patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
-                 patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42)):
+                 patch("orchestrator.smart_phase.should_skip", return_value=(False, 0.42, {"reason": "stub", "stances": {}, "split": False})):
                 events = [
                     event
                     async for event in CouncilOrchestrator().run(

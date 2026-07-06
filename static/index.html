@@ -1500,6 +1500,38 @@
         return;
       }
 
+      if (ev.type === 'smart_phase_decision') {
+        const card = document.createElement('div');
+        card.className = 'status-card';
+        const stances = Object.entries(ev.stances || {})
+          .map(([m, s]) => `${m}: ${s.verdict}${s.confidence != null ? ` (${s.confidence}/10)` : ''}`)
+          .join(' · ');
+        card.innerHTML = `<div class="preset-title">Deliberation gate</div>` +
+          `<div class="status-line">${escapeHtml(ev.reason || '')}</div>` +
+          (stances ? `<div class="status-line">${escapeHtml(stances)}</div>` : '');
+        panel.appendChild(card);
+        return;
+      }
+
+      if (ev.type === 'rebuttal_start') {
+        const banner = document.createElement('div');
+        banner.className = 'phase-banner';
+        banner.innerHTML = `<span>REBUTTAL // ${escapeHtml((ev.label || 'Members respond to critiques').toUpperCase())}</span>`;
+        panel.appendChild(banner);
+        return;
+      }
+
+      if (ev.type === 'chairman_grounding') {
+        const card = document.createElement('div');
+        card.className = 'status-card';
+        const pct = Math.round((ev.ratio || 0) * 100);
+        const cls = pct >= 60 ? 'status-line' : 'status-line status-warn';
+        card.innerHTML = `<div class="preset-title">Verdict grounding</div>` +
+          `<div class="${cls}">${pct}% of consensus/dispute points trace to named members${pct < 60 ? ' — treat unattributed claims with caution' : ''}.</div>`;
+        panel.appendChild(card);
+        return;
+      }
+
       if (ev.type === 'phase_start') {
         const banner = document.createElement('div');
         banner.className = 'phase-banner';

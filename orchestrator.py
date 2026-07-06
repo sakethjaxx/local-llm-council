@@ -174,6 +174,20 @@ def _specificity_score(chairman_result: dict, raw_text: str) -> float:
     return round(min(1.0, (scored_items / len(action_items)) + structure_bonus), 3)
 
 
+def _grounding_ratio(chairman_result: dict, member_labels: list[str]) -> Optional[float]:
+    """Fraction of consensus/dispute points that name at least one real member label."""
+    points = (chairman_result.get("consensus") or []) + (chairman_result.get("disputes") or [])
+    if not points:
+        return None
+    lowered_labels = [label.lower() for label in member_labels if label]
+    if not lowered_labels:
+        return None
+    grounded = sum(
+        1 for point in points if any(label in str(point).lower() for label in lowered_labels)
+    )
+    return round(grounded / len(points), 3)
+
+
 # Make litellm not spam the console
 litellm.suppress_debug_info = True
 
@@ -184,6 +198,7 @@ def _load_prompt(name: str) -> str:
 
 PHASE1_PROMPT = _load_prompt("phase1_analyze.txt")
 PHASE2_PROMPT = _load_prompt("phase2_review.txt")
+PHASE2_REBUTTAL_PROMPT = _load_prompt("phase2_rebuttal.txt")
 PHASE3_PROMPT = _load_prompt("phase3_chairman.txt")
 
 DEFAULT_MEMBER_CONFIG = get_default_council_config()
@@ -515,6 +530,44 @@ class CouncilOrchestrator:
             run_id=run_id,
         )
 
+    async def _member_rebuttal(
+        self,
+        member_id: str,
+        cfg: dict,
+        members_config: dict,
+        own_analysis: str,
+        reviews: dict[str, str],
+        queue: asyncio.Queue,
+    ):
+        """One bounded rebuttal turn: the member sees peer critiques and concedes or defends."""
+        system_prompt = PHASE2_REBUTTAL_PROMPT.format(persona=cfg.get("persona", ""))
+
+        prompt_parts = [f"YOUR ORIGINAL ANALYSIS:\n{own_analysis}\n", "\nPEER CRITIQUES:\n"]
+        for reviewer_id, review in reviews.items():
+            if reviewer_id == member_id:
+                continue
+            reviewer_label = members_config.get(reviewer_id, {}).get("label", reviewer_id)
+            prompt_parts.append(f"--- {reviewer_label} ---\n{review}\n")
+
+        prompt = "\n".join(prompt_parts)
+        model_id = cfg.get("model", "")
+        context_window = caps_for(model_id)[0].context_window or 4096
+        max_tokens = min(self._token_budget["phase2"], 300)
+        max_input_tokens = max(125, context_window - max_tokens - 800)
+        if _count_tokens(model_id, prompt) > max_input_tokens:
+            prompt = _truncate_to_token_budget(model_id, prompt, max_input_tokens)
+
+        await queue.put({"type": "member_token", "member": member_id, "chunk": "\n\n---\n**REBUTTAL** — "})
+        messages = self._build_messages(model_id, system_prompt, prompt)
+        await self._stream_llm_to_queue(
+            member_id,
+            cfg,
+            2,
+            messages,
+            queue,
+            max_tokens,
+        )
+
     async def _chairman_decide(
         self,
         chairman_cfg: dict,
@@ -655,6 +708,18 @@ class CouncilOrchestrator:
             topic_context = await chunk_and_summarize(scraped_topic, chairman_cfg["model"])
             full_topic = f"{past_context}{skills_block}{topic_context}"
 
+            member_models = {config[m].get("model", "") for m in council_members}
+            if len(council_members) > 1 and len(member_models) == 1:
+                only_model = next(iter(member_models))
+                yield {
+                    "type": "warning",
+                    "message": (
+                        f"All {len(council_members)} seats use the same model ({only_model}). "
+                        "Their blind spots are correlated — consensus from clones is weaker evidence. "
+                        "Add a second local model for genuine diversity."
+                    ),
+                }
+
             yield {"type": "phase_start", "phase": 1, "label": "Independent Analysis"}
             for member in council_members:
                 yield {"type": "member_thinking", "member": member, "meta": config[member]}
@@ -672,28 +737,42 @@ class CouncilOrchestrator:
                 if event["type"] == "member_done":
                     completed += 1
                     analyses[event["member"]] = event["full_text"]
-                else:
-                    yield event
+                yield event
 
             reviews = {}
             phase1_divergence = None
 
             if not deep_debate:
-                yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (Bypassed - Fast Mode)"}
+                yield {
+                    "type": "phase_start",
+                    "phase": 2,
+                    "label": "Cross-Review (Skipped — Fast mode: no debate. Enable Deep Debate for cross-examination.)",
+                }
                 for member in council_members:
                     reviews[member] = "SKIPPED - Fast Code Review mode enabled. Bypassing debate for latency."
                     await asyncio.to_thread(run_store.record_phase_output, run_id, 2, member, reviews[member])
                     yield {"type": "member_done", "member": member, "full_text": reviews[member]}
                 await asyncio.sleep(0.5)
             else:
-                is_unanimous, smart_score = await smart_phase.should_skip(analyses)
+                is_unanimous, smart_score, gate_info = await smart_phase.should_skip(analyses)
                 phase1_divergence = round(max(0.0, min(1.0, 1.0 - smart_score)), 4)
                 await asyncio.to_thread(run_store.update_smart_phase_score, run_id, smart_score)
+                yield {
+                    "type": "smart_phase_decision",
+                    "skip": is_unanimous,
+                    "score": round(smart_score, 4),
+                    "reason": gate_info.get("reason", ""),
+                    "stances": gate_info.get("stances", {}),
+                    "split": gate_info.get("split", False),
+                }
 
                 if is_unanimous:
-                    yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (SKIPPED - Unanimous Consensus!)"}
+                    yield {"type": "phase_start", "phase": 2, "label": f"Cross-Review (SKIPPED — {gate_info.get('reason', 'unanimous consensus')})"}
                     for member in council_members:
-                        reviews[member] = "SKIPPED - The council was in unanimous agreement during Phase 1. No factual disputes detected."
+                        reviews[member] = (
+                            "SKIPPED - Unanimous agreement in Phase 1: "
+                            + gate_info.get("reason", "no disputes detected.")
+                        )
                         await asyncio.to_thread(run_store.record_phase_output, run_id, 2, member, reviews[member])
                         yield {"type": "member_done", "member": member, "full_text": reviews[member]}
                     await asyncio.sleep(1)
@@ -714,8 +793,40 @@ class CouncilOrchestrator:
                         if event["type"] == "member_done":
                             completed += 1
                             reviews[event["member"]] = event["full_text"]
-                        else:
+                        yield event
+
+                    if gate_info.get("split"):
+                        yield {"type": "rebuttal_start", "label": "Rebuttal Round — members concede or defend"}
+
+                        queue = asyncio.Queue()
+                        for member in council_members:
+                            asyncio.create_task(
+                                self._member_rebuttal(
+                                    member, config[member], config, analyses[member], reviews, queue
+                                )
+                            )
+
+                        rebuttals = {}
+                        completed = 0
+                        while completed < len(council_members):
+                            event = await queue.get()
+                            if event["type"] == "member_done":
+                                completed += 1
+                                rebuttals[event["member"]] = event["full_text"]
                             yield event
+
+                        for member, rebuttal_text in rebuttals.items():
+                            if not rebuttal_text.strip():
+                                continue
+                            label = config[member].get("label", member)
+                            reviews[member] = f"{reviews[member]}\n\n[{label} REBUTTAL]\n{rebuttal_text}"
+                            await asyncio.to_thread(
+                                run_store.record_phase_output,
+                                run_id,
+                                2,
+                                f"{member}:rebuttal",
+                                rebuttal_text,
+                            )
 
             yield {"type": "phase_start", "phase": 3, "label": "Chairman's Verdict"}
             yield {"type": "member_thinking", "member": "chairman", "phase": 3, "meta": chairman_cfg}
@@ -732,11 +843,15 @@ class CouncilOrchestrator:
                 if event["type"] == "member_done":
                     completed += 1
                     chairman_decision_text = event["full_text"]
-                else:
-                    yield event
+                yield event
 
             chairman_result = parse_chairman_response(chairman_decision_text)
             specificity_score = _specificity_score(chairman_result, chairman_decision_text)
+            member_labels = [config[m].get("label", m) for m in council_members]
+            grounding = _grounding_ratio(chairman_result, member_labels)
+            if grounding is not None:
+                logger.info("chairman_grounding", extra={"ratio": grounding})
+                yield {"type": "chairman_grounding", "ratio": grounding}
             await asyncio.to_thread(
                 run_store.record_phase_output,
                 run_id,

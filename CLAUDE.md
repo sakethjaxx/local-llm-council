@@ -24,7 +24,7 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | `orchestrator.py` | 3-phase pipeline, streaming, retry logic |
 | `main.py` | FastAPI app, all HTTP endpoints |
 | `router_agent.py` | Dynamic Swarm — LLM generates roster personas |
-| `smart_phase.py` | MiniLM cosine similarity → skip Phase 2 if unanimous |
+| `smart_phase.py` | Stance-based consensus gate (STANCE line comparison) → skip Phase 2 if unanimous; cosine sim kept as divergence telemetry |
 | `memory_graph.py` | NetworkX triple store, keyword retrieval (upgrading to SQLite+vectors) |
 | `provider_caps.py` | Model capability registry — vision, context window, cost, response_format |
 | `run_store.py` | SQLite persistence for runs, phase outputs, feedback |
@@ -53,12 +53,14 @@ User Input (topic + attachments)
   Seat B ──┼──► asyncio.gather() → N independent analyses
   Seat C ──┘
         │
-        ▼ smart_phase: cosine sim > 0.88? skip Phase 2
+        ▼ smart_phase: all STANCE lines agree? skip Phase 2 (explainable decision)
         │
 [Phase 2] Cross-Review (each seat critiques others)
   Seat A reviews B, C
   Seat B reviews A, C     ◄── parallel
   Seat C reviews A, B
+        │
+        ▼ stances split? one bounded rebuttal round (concede or defend)
         │
         ▼
 [Phase 3] Chairman Synthesis
