@@ -31,19 +31,29 @@ Run several local or optional cloud LLMs as a structured review council. Each mo
 
 ## Quick Start
 
-1. `git clone <repo-url>`
-2. `cd local-llm-council`
-3. `python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate`
-4. `pip install -r requirements.txt`
-5. `cp env.example .env`
-6. `ollama pull llama3.2`
-7. `uvicorn main:app --port 8765`
-8. open `http://localhost:8765`
+```bash
+git clone <repo-url>
+cd local-llm-council
+./start.sh        # Windows: .\start.ps1
+```
+
+Then open http://localhost:8765. The script creates the venv, installs dependencies, sets up `.env`, and checks for Ollama.
+
+Need a local model? Install [Ollama](https://ollama.com/download) and run `ollama pull llama3.2` — the app tells you exactly which models it needs if any are missing. See `docs/FIRST_RUN.md` for a walkthrough.
+
+### Docker
+
+```bash
+COUNCIL_API_KEY=change-me docker compose up
+```
+
+Starts the API plus an Ollama container and auto-pulls required models on first run.
 
 ## Configuration
 
 | Variable | Description |
 | --- | --- |
+| `OLLAMA_BASE_URL` | Ollama server URL. Defaults to `http://localhost:11434`. |
 | `COUNCIL_HOST` | Host interface for the FastAPI server. Defaults to `127.0.0.1` for local-only access. |
 | `COUNCIL_PORT` | Port used by the FastAPI server. Defaults to `8765`. |
 | `COUNCIL_API_KEY` | Optional API key required for authenticated access when binding to non-localhost. |
@@ -70,10 +80,19 @@ LLM Council is a FastAPI application that orchestrates multiple model seats, str
 ## Testing
 
 ```bash
-./venv/bin/pytest tests/ -q
+./venv/bin/pip install -r requirements-dev.txt
+./venv/bin/pytest tests/ -q --ignore=tests/eval
 ```
 
 The local eval harness under `tests/eval/` is separate because it requires Ollama and a pinned local model.
+
+## Docs
+
+- `docs/FIRST_RUN.md` — Ollama setup walkthrough
+- `docs/API.md` — HTTP endpoints with curl examples
+- `docs/CUSTOMIZATION.md` — personas, providers, prompts
+- `docs/TROUBLESHOOTING.md` — common issues and fixes
+- `docs/ARCHITECTURE.md` — how it works
 
 ## Contributing
 

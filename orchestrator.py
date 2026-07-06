@@ -179,7 +179,7 @@ litellm.suppress_debug_info = True
 
 def _load_prompt(name: str) -> str:
     path = Path(__file__).parent / "agent_prompts" / "phase_prompts" / name
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 PHASE1_PROMPT = _load_prompt("phase1_analyze.txt")

@@ -1,9 +1,18 @@
+import json
 import os
 import subprocess
+import urllib.error
+import urllib.request
 from typing import Iterable
 
 from hardware_detect import get_hardware_suggestion
 from provider_caps import caps_for
+
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+
+
+def ollama_base_url() -> str:
+    return (os.getenv("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
 
 
 def _ollama_tag(model: str) -> str:
@@ -23,7 +32,18 @@ def _iter_ollama_models(config: dict) -> Iterable[str]:
                 yield tag
 
 
-def get_installed_models() -> list[str]:
+def _installed_models_via_http() -> list[str] | None:
+    """Query the Ollama HTTP API. Returns None if the server is unreachable."""
+    try:
+        with urllib.request.urlopen(f"{ollama_base_url()}/api/tags", timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def _installed_models_via_cli() -> list[str] | None:
+    """Fall back to the `ollama list` CLI. Returns None if the CLI is unavailable or fails."""
     try:
         result = subprocess.run(
             ["ollama", "list"],
@@ -32,15 +52,10 @@ def get_installed_models() -> list[str]:
             timeout=10,
             check=True,
         )
-    except FileNotFoundError:
-        return []
     except Exception:
-        return []
+        return None
 
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if not lines:
-        return []
-
     models = []
     for line in lines[1:]:
         parts = line.split()
@@ -49,17 +64,54 @@ def get_installed_models() -> list[str]:
     return models
 
 
+def get_installed_models() -> list[str] | None:
+    """List installed Ollama models. Returns None when Ollama itself is unreachable."""
+    models = _installed_models_via_http()
+    if models is not None:
+        return models
+    return _installed_models_via_cli()
+
+
+def is_ollama_running() -> bool:
+    return get_installed_models() is not None
+
+
 def get_required_models(config: dict | None = None) -> list[str]:
     config = config or get_hardware_suggestion()["config"]
     return list(_iter_ollama_models(config))
 
 
 def get_missing_models(config: dict | None = None) -> list[str]:
-    installed = set(get_installed_models())
+    installed = set(get_installed_models() or [])
     return [model for model in get_required_models(config) if model not in installed]
 
 
+def _pull_model_via_http(tag: str) -> dict | None:
+    try:
+        req = urllib.request.Request(
+            f"{ollama_base_url()}/api/pull",
+            data=json.dumps({"name": tag, "stream": False}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=1800) as resp:
+            body = json.loads(resp.read().decode())
+        status = body.get("status", "")
+        return {
+            "model": tag,
+            "success": status == "success",
+            "stdout": status,
+            "stderr": "" if status == "success" else json.dumps(body)[-4000:],
+            "returncode": 0 if status == "success" else 1,
+        }
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
 def pull_model(tag: str) -> dict:
+    result = _pull_model_via_http(tag)
+    if result is not None:
+        return result
     try:
         result = subprocess.run(
             ["ollama", "pull", tag],
@@ -93,27 +145,45 @@ def pull_model(tag: str) -> dict:
         }
 
 
+def _status_hint(running: bool, missing: list[str]) -> str:
+    if not running:
+        return (
+            f"Ollama is not reachable at {ollama_base_url()}. "
+            "Start it with `ollama serve` (install from https://ollama.com/download), "
+            "or set OLLAMA_BASE_URL if it runs elsewhere."
+        )
+    if missing:
+        pulls = " && ".join(f"ollama pull {tag}" for tag in missing)
+        return f"Missing local models. Install them with: {pulls}"
+    return ""
+
+
 def ensure_models_for_config(config: dict, auto_pull: bool = False) -> dict:
     required = get_required_models(config)
     installed = get_installed_models()
+    running = installed is not None
+    installed = installed or []
     missing = [model for model in required if model not in installed]
     pulled = []
 
-    if auto_pull:
+    if auto_pull and running:
         for model in list(missing):
             result = pull_model(model)
             pulled.append(result)
-        installed = get_installed_models()
+        installed = get_installed_models() or []
         missing = [model for model in required if model not in installed]
 
     return {
         "provider": "ollama",
+        "base_url": ollama_base_url(),
+        "ollama_running": running,
         "required": required,
         "installed": installed,
         "missing": missing,
         "pulled": pulled,
-        "ready": not missing,
+        "ready": (not required) or (running and not missing),
         "auto_pull_enabled": auto_pull,
+        "hint": "" if not required else _status_hint(running, missing),
     }
 
 

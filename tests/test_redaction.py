@@ -64,8 +64,11 @@ class RedactionTests(unittest.TestCase):
                 deep_debate=False,
             )
 
-            with sqlite3.connect(db_path) as conn:
+            conn = sqlite3.connect(db_path)
+            try:
                 raw = conn.execute("SELECT roster_json FROM runs WHERE run_id = ?", ("redacted-run",)).fetchone()[0]
+            finally:
+                conn.close()
             roster = json.loads(raw)
 
         self.assertNotIn("api_key", roster["architect"])

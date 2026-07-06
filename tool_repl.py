@@ -20,7 +20,7 @@ def execute_python(code: str) -> str:
     code = code.strip()
     
     temp_file = "sandbox_temp.py"
-    with open(temp_file, "w") as f:
+    with open(temp_file, "w", encoding="utf-8") as f:
         f.write(code)
         
     try:

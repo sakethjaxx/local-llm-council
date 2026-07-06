@@ -1,3 +1,4 @@
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -47,6 +48,11 @@ def get_api_key_for_model(model_id: str) -> str | None:
 
 
 def litellm_kwargs_for_model(model_id: str) -> dict:
+    if caps_for(model_id)[1].provider == "ollama":
+        base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+        if base:
+            return {"api_base": base}
+        return {}
     api_key = get_api_key_for_model(model_id)
     if not api_key:
         return {}

@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      COUNCIL_HOST: 0.0.0.0
+      COUNCIL_API_KEY: ${COUNCIL_API_KEY:?Set COUNCIL_API_KEY in .env — required when binding beyond localhost}
+      COUNCIL_CORS_ORIGINS: ${COUNCIL_CORS_ORIGINS:-http://localhost:8765,http://127.0.0.1:8765}
+      COUNCIL_BOOTSTRAP_LOCAL_MODELS: ${COUNCIL_BOOTSTRAP_LOCAL_MODELS:-true}
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  ollama_data:

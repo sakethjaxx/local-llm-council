@@ -29,7 +29,7 @@ from io_parser import parse_uploaded_file
 from logging_utils import get_logger
 from memory_store import memory_store
 from metrics_store import metrics_store
-from ollama_manager import auto_pull_enabled, ensure_models_for_config
+from ollama_manager import auto_pull_enabled, ensure_models_for_config, ollama_base_url
 from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG
 from provider_caps import redact_config, supports_image_input
 from project_graph import get_project_code_graph
@@ -130,6 +130,43 @@ def _shutdown_event_payload() -> dict:
     return {"type": "shutdown", "message": "Server shutdown requested. Active stream is closing."}
 
 
+_HEARTBEAT_DONE = object()
+
+
+async def _with_heartbeat(source, interval: float = 20.0):
+    """Wrap an SSE generator, emitting a keep-alive comment when the source is quiet.
+
+    Prevents proxies and browsers from dropping the connection during long
+    silent stretches (e.g. cold Ollama model load). The source is drained by a
+    single task so contextvar scopes inside it stay in one context.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _drain():
+        try:
+            async for chunk in source:
+                await queue.put(chunk)
+            await queue.put(_HEARTBEAT_DONE)
+        except BaseException as exc:
+            await queue.put(exc)
+
+    drain_task = asyncio.create_task(_drain())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=interval)
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+                continue
+            if item is _HEARTBEAT_DONE:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        drain_task.cancel()
+
+
 def _metrics_run_for_export(run_id: str) -> dict:
     for run in metrics_store.list_runs(limit=500):
         if run.get("run_id") == run_id:
@@ -207,7 +244,7 @@ app.mount("/demo-samples", StaticFiles(directory="demo_samples"), name="demo-sam
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    with open("static/index.html") as f:
+    with open("static/index.html", encoding="utf-8") as f:
         return f.read()
 
 
@@ -252,8 +289,16 @@ async def council_stream(
     if council_config:
         try:
             config_dict = json.loads(council_config)
-        except:
-            pass
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail="council_config is not valid JSON. Fix the config or omit it to use the default roster.",
+            )
+        if not isinstance(config_dict, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="council_config must be a JSON object mapping seat ids to seat configs.",
+            )
 
     async def event_generator():
         with track_active_stream():
@@ -277,12 +322,9 @@ async def council_stream(
                 yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
-                    metrics_store.finish_run(
-                        run_id,
-                        status="failed",
-                        error="Missing Ollama models: " + ", ".join(model_status["missing"]),
-                    )
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Missing Ollama models: ' + ', '.join(model_status['missing'])})}\n\n"
+                    reason = model_status.get("hint") or ("Missing Ollama models: " + ", ".join(model_status["missing"]))
+                    metrics_store.finish_run(run_id, status="failed", error=reason)
+                    yield f"data: {json.dumps({'type': 'error', 'message': reason})}\n\n"
                     return
                 if dynamic_swarm:
                     from router_agent import generate_swarm
@@ -323,7 +365,7 @@ async def council_stream(
                     yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
-        event_generator(),
+        _with_heartbeat(event_generator()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -389,7 +431,7 @@ async def council_chat(req: ChatRequest, request: Request):
                     yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
-        chat_stream(),
+        _with_heartbeat(chat_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -519,7 +561,8 @@ async def review_project(req: ReviewProjectRequest, request: Request):
                 model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Missing models: ' + ', '.join(model_status['missing'])})}\n\n"
+                    reason = model_status.get("hint") or ("Missing models: " + ", ".join(model_status["missing"]))
+                    yield f"data: {json.dumps({'type': 'error', 'message': reason})}\n\n"
                     return
 
                 orchestrator = CouncilOrchestrator()
@@ -542,7 +585,7 @@ async def review_project(req: ReviewProjectRequest, request: Request):
                     yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
-        event_generator(),
+        _with_heartbeat(event_generator()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -652,7 +695,7 @@ async def health_ready():
     ollama_ok = False
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get("http://localhost:11434/api/tags")
+            r = await client.get(f"{ollama_base_url()}/api/tags")
             ollama_ok = r.status_code == 200
     except Exception:
         pass
@@ -671,7 +714,7 @@ async def status():
     ollama_ok = False
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get("http://localhost:11434/api/tags")
+            r = await client.get(f"{ollama_base_url()}/api/tags")
             ollama_ok = r.status_code == 200
     except Exception:
         pass
