@@ -10,7 +10,17 @@ Ollama is not installed or not running.
 
 ## "Missing local models. Install them with: ollama pull ..."
 
-The error message lists the exact pull commands. Run them, or set `COUNCIL_BOOTSTRAP_LOCAL_MODELS=true` in `.env` to auto-pull on demand.
+The error message lists the exact pull commands. Run them, or set `COUNCIL_BOOTSTRAP_LOCAL_MODELS=true` in `.env` to auto-pull on demand. The UI's guided setup (shown automatically when models are missing) can also pull them with one click.
+
+Note: `name` and `name:latest` are treated as the same model — a roster pinned to `ollama/llama3.2` is satisfied by an installed `llama3.2:latest`.
+
+## The gate never skips debate / always debates
+
+The consensus gate compares each member's explicit `STANCE:` line. It skips cross-review only when every seat independently lands the same PROCEED/HOLD verdict. Adversarial persona mixes (e.g. an always-cautious Risk Assessor) rarely produce unanimity — that is the personas working, not a bug. A member that omits the STANCE line gets one fallback classification; if that also fails, the run debates to be safe.
+
+## Council Confidence seems low despite agreement
+
+If all seats run the same model, the score is capped at 45 and the UI says why: clones share blind spots, so their agreement is weak evidence. Give at least one seat a different model.
 
 ## UI loads but a run fails immediately
 

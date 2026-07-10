@@ -18,7 +18,7 @@
 
 ### P1-1: Run Store Endpoints ✅ (wired, needs validation)
 
-`main.py` exposes:
+`src/llm_council/main.py` exposes:
 
 - `GET /runs` — list runs, optional `?fingerprint_hash=` filter, `?limit=` cap
 - `GET /runs/{run_id}` — full run with all phase outputs
@@ -150,11 +150,11 @@ Acceptance:
 - `import embeddings; e1 = embeddings.get_embedder(); e2 = embeddings.get_embedder(); assert e1 is e2`
 - `smart_phase.py` has no inline SentenceTransformer import
 
-### P1.5-2: Presets Extracted to `presets.json` 🔨
+### P1.5-2: Presets Extracted to `src/llm_council/resources/presets.json` 🔨
 
-Demo presets, seat templates, and persona defaults currently live in `demo_catalog.py` (Python) and partially in `static/index.html` (inline JS). Extract to `presets.json` served via `GET /config/presets`.
+Demo presets, seat templates, and persona defaults currently live in `src/llm_council/demo_catalog.py` (Python) and partially in `src/llm_council/web/static/index.html` (inline JS). Extract to `src/llm_council/resources/presets.json` served via `GET /config/presets`.
 
-`presets.json` structure:
+`src/llm_council/resources/presets.json` structure:
 ```json
 {
   "version": "1",
@@ -172,12 +172,12 @@ Demo presets, seat templates, and persona defaults currently live in `demo_catal
 }
 ```
 
-`demo_catalog.py` becomes a thin loader that reads `presets.json`.
+`src/llm_council/demo_catalog.py` becomes a thin loader that reads `src/llm_council/resources/presets.json`.
 `GET /config/presets` returns the parsed JSON.
 `index.html` fetches `/config/presets` on load instead of hardcoding.
 
 Acceptance:
-- Adding a new preset requires only editing `presets.json`, not Python or JS
+- Adding a new preset requires only editing `src/llm_council/resources/presets.json`, not Python or JS
 - Existing demo presets render identically in the UI
 - `test_main.py` asserts `/config/presets` returns 200 with a non-empty `presets` list
 
@@ -195,7 +195,7 @@ Acceptance:
 
 Phase 1 / 2 / 3 system prompts are hardcoded strings in `orchestrator.py`. A single bad edit silently degrades every run with no diff history.
 
-Extract to `agent_prompts/phase_prompts/`:
+Extract to `src/llm_council/resources/agent_prompts/phase_prompts/`:
 ```
 phase1_analyze.txt
 phase2_review.txt
@@ -286,7 +286,7 @@ Detects:
 Used by `run_store` as `fingerprint_hash` to group related runs.
 
 Acceptance:
-- Given `demo_samples/` dir, fingerprint returns non-empty language + domain
+- Given `src/llm_council/resources/demo_samples/` dir, fingerprint returns non-empty language + domain
 - Hash is deterministic: same dir → same hash
 - `tests/test_fingerprint.py` covers empty dir, Python-only dir, mixed dir
 

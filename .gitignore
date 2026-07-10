@@ -1,6 +1,8 @@
 .env
 __pycache__/
 *.pyc
+.pytest_cache/
+.pytest-tmp/
 .DS_Store
 venv/
 council_metrics.jsonl

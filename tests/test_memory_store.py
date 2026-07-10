@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from memory_store import SQLiteMemory
+from llm_council.memory_store import SQLiteMemory
 
 
 class _FakeEmbedder:
@@ -37,7 +37,7 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
         self.store = SQLiteMemory(":memory:")
 
     async def test_empty_db_returns_empty_context(self):
-        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()):
+        with patch("llm_council.memory_store.get_embedder", return_value=_FakeEmbedder()):
             context = await self.store.get_context("microservices design", "test-model")
         self.assertEqual(context, "")
 
@@ -47,8 +47,8 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
                 [{"subject": "microservices", "predicate": "decided_to_use", "object": "service mesh"}]
             )
 
-        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()), \
-             patch("memory_store.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.memory_store.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.memory_store.litellm.acompletion", side_effect=fake_acompletion):
             await self.store.extract_memory("microservices design", "use service mesh", "test-model")
             context = await self.store.get_context("service mesh architecture", "test-model")
 
@@ -80,7 +80,7 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
                 ("fresh-system", "recommended", "service mesh", 1.0, now, now, blob),
             )
 
-        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()):
+        with patch("llm_council.memory_store.get_embedder", return_value=_FakeEmbedder()):
             context = await self.store.get_context("service mesh architecture", "test-model")
 
         lines = [line for line in context.splitlines() if "->" in line]
@@ -96,8 +96,8 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
         async def fake_acompletion(*args, **kwargs):
             return _fake_completion_with_triples(responses.pop(0))
 
-        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()), \
-             patch("memory_store.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.memory_store.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.memory_store.litellm.acompletion", side_effect=fake_acompletion):
             await self.store.extract_memory("microservices design", "use service mesh", "test-model")
             await self.store.extract_memory("service mesh architecture", "keep service mesh", "test-model")
 
@@ -187,8 +187,8 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
                 ("run-1", '{"verdict":"hold","risk_score":6,"action_items":[],"consensus":[],"disputes":[]}'),
             )
 
-        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()), \
-             patch("memory_store.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.memory_store.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.memory_store.litellm.acompletion", side_effect=fake_acompletion):
             await self.store.extract_memory("microservices design", "use service mesh", "test-model", run_id="run-1")
 
         with self.store._connection() as conn:

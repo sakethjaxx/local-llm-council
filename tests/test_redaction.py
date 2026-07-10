@@ -1,11 +1,8 @@
 import json
-import os
-import sqlite3
-import tempfile
 import unittest
 
-from provider_caps import redact_config
-from run_store import RunStore
+from llm_council.provider_caps import redact_config
+from llm_council.run_store import RunStore
 
 
 class RedactionTests(unittest.TestCase):
@@ -54,22 +51,17 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(redacted["non_sensitive"], "preserve")
 
     def test_roster_round_trips_without_sensitive_key_in_db(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = os.path.join(temp_dir, "runs.db")
-            store = RunStore(db_path)
-            store.begin_run(
-                "redacted-run",
-                "topic",
-                {"architect": {"model": "openai/gpt-4o-mini", "api_key": "sk-test123"}},
-                deep_debate=False,
-            )
+        store = RunStore(":memory:")
+        store.begin_run(
+            "redacted-run",
+            "topic",
+            {"architect": {"model": "openai/gpt-4o-mini", "api_key": "sk-test123"}},
+            deep_debate=False,
+        )
 
-            conn = sqlite3.connect(db_path)
-            try:
-                raw = conn.execute("SELECT roster_json FROM runs WHERE run_id = ?", ("redacted-run",)).fetchone()[0]
-            finally:
-                conn.close()
-            roster = json.loads(raw)
+        with store._connection() as conn:
+            raw = conn.execute("SELECT roster_json FROM runs WHERE run_id = ?", ("redacted-run",)).fetchone()[0]
+        roster = json.loads(raw)
 
         self.assertNotIn("api_key", roster["architect"])
         self.assertEqual(roster["architect"]["model"], "openai/gpt-4o-mini")

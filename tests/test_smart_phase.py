@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-import smart_phase
+import llm_council.smart_phase as smart_phase
 
 
 class FakeEmbedder:
@@ -40,6 +40,89 @@ class StanceExtractionTests(unittest.TestCase):
     def test_returns_none_without_stance(self):
         self.assertIsNone(smart_phase.extract_stance("No stance anywhere in this text."))
         self.assertIsNone(smart_phase.extract_stance(""))
+
+    def test_maps_small_model_synonyms_to_canonical_verdicts(self):
+        # Small local models often ignore the exact tokens and write GO/BLOCK/etc.
+        self.assertEqual(smart_phase.extract_stance("STANCE: GO | CONFIDENCE: 7 | ship")["verdict"], "PROCEED")
+        self.assertEqual(smart_phase.extract_stance("STANCE: BLOCK | CONFIDENCE: 9 | no")["verdict"], "HOLD")
+        self.assertEqual(smart_phase.extract_stance("STANCE: SPLIT | CONFIDENCE: 5 | torn")["verdict"], "MIXED")
+
+    def test_unknown_verdict_token_fails_safe_to_none(self):
+        # An unmappable verdict must NOT be guessed — it fails safe into debate.
+        self.assertIsNone(smart_phase.extract_stance("STANCE: maybe | CONFIDENCE: 5 | who knows"))
+
+    def test_last_mappable_stance_wins_over_later_garbage(self):
+        stance = smart_phase.extract_stance(
+            "STANCE: HOLD | CONFIDENCE: 8 | real position\nSTANCE: TBD | CONFIDENCE: 1 | placeholder"
+        )
+        self.assertEqual(stance["verdict"], "HOLD")
+
+
+def _fake_llm_answer(answer: str):
+    async def fake_acompletion(*args, **kwargs):
+        class Msg:
+            content = answer
+        class Choice:
+            message = Msg()
+        class Resp:
+            choices = [Choice()]
+        return Resp()
+    return fake_acompletion
+
+
+class StanceFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fallback_recovers_missing_stance(self):
+        with patch.object(smart_phase.litellm, "acompletion", side_effect=_fake_llm_answer("PROCEED")):
+            stance = await smart_phase.classify_stance_fallback("Analysis without stance line.", "ollama/x")
+        self.assertEqual(stance["verdict"], "PROCEED")
+
+    async def test_fallback_maps_synonyms(self):
+        with patch.object(smart_phase.litellm, "acompletion", side_effect=_fake_llm_answer("Block.")):
+            stance = await smart_phase.classify_stance_fallback("Analysis text.", "ollama/x")
+        self.assertEqual(stance["verdict"], "HOLD")
+
+    async def test_fallback_unmappable_answer_returns_none(self):
+        with patch.object(smart_phase.litellm, "acompletion", side_effect=_fake_llm_answer("It depends entirely")):
+            stance = await smart_phase.classify_stance_fallback("Analysis text.", "ollama/x")
+        self.assertIsNone(stance)
+
+    async def test_fallback_llm_error_returns_none(self):
+        async def boom(*args, **kwargs):
+            raise RuntimeError("connection refused")
+        with patch.object(smart_phase.litellm, "acompletion", side_effect=boom):
+            stance = await smart_phase.classify_stance_fallback("Analysis text.", "ollama/x")
+        self.assertIsNone(stance)
+
+    async def test_resolve_stances_mixes_native_and_fallback(self):
+        analyses = {
+            "a": "Analysis.\nSTANCE: PROCEED | CONFIDENCE: 8 | Go.",
+            "b": "Analysis with no stance line at all.",
+        }
+        with patch.object(smart_phase.litellm, "acompletion", side_effect=_fake_llm_answer("PROCEED")):
+            stances, sources = await smart_phase.resolve_stances(analyses, {"a": "ollama/x", "b": "ollama/x"})
+        self.assertEqual(sources, {"a": "native", "b": "fallback"})
+        self.assertEqual(stances["b"]["verdict"], "PROCEED")
+
+    async def test_gate_skips_when_fallback_completes_unanimity(self):
+        analyses = {
+            "a": "Analysis.\nSTANCE: PROCEED | CONFIDENCE: 8 | Go.",
+            "b": "I fully endorse this proposal; no stance line though.",
+        }
+        with _patched_embedder(), \
+             patch.object(smart_phase.litellm, "acompletion", side_effect=_fake_llm_answer("PROCEED")):
+            skip, score, info = await smart_phase.should_skip(analyses, {"a": "ollama/x", "b": "ollama/x"})
+        self.assertTrue(skip)
+        self.assertIn("recovered by fallback", info["reason"])
+
+    async def test_gate_without_models_keeps_fail_safe(self):
+        analyses = {
+            "a": "Analysis.\nSTANCE: PROCEED | CONFIDENCE: 8 | Go.",
+            "b": "Analysis with no stance line at all.",
+        }
+        with _patched_embedder():
+            skip, score, info = await smart_phase.should_skip(analyses)
+        self.assertFalse(skip)
+        self.assertIn("b", info["reason"])
 
 
 class SmartPhaseGateTests(unittest.IsolatedAsyncioTestCase):

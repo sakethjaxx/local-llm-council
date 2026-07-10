@@ -14,18 +14,19 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | Embeddings | `sentence-transformers` `all-MiniLM-L6-v2` |
 | Persistence | SQLite (`council_runs.db`) |
 | Streaming | Server-Sent Events (SSE) |
-| Frontend | Single `static/index.html` (vanilla JS, cyberpunk UI) |
+| Frontend | `src/llm_council/web/static/index.html` shell + buildless ES modules in `src/llm_council/web/static/js/` + `src/llm_council/web/static/css/main.css` |
 | Python | 3.13 tested, 3.12+ intended |
 
 ## Key Files
 
 | File | Role |
 |---|---|
-| `orchestrator.py` | 3-phase pipeline, streaming, retry logic |
-| `main.py` | FastAPI app, all HTTP endpoints |
+| `src/llm_council/orchestrator.py` | 3-phase pipeline, streaming, retry logic |
+| `src/llm_council/main.py` | FastAPI app, all HTTP endpoints |
 | `router_agent.py` | Dynamic Swarm — LLM generates roster personas |
-| `smart_phase.py` | Stance-based consensus gate (STANCE line comparison) → skip Phase 2 if unanimous; cosine sim kept as divergence telemetry |
-| `memory_graph.py` | NetworkX triple store, keyword retrieval (upgrading to SQLite+vectors) |
+| `smart_phase.py` | Stance-based consensus gate (STANCE line, synonym-tolerant, zero-temp fallback classify on miss) → skip Phase 2 if unanimous; cosine sim kept as divergence telemetry |
+| `confidence.py` | Pure trust functions: grounding enforcement (strip unattributed chairman points below 0.5 ratio) + Council Confidence 0-100 (single-model council capped at 45) |
+| `memory_store.py` | SQLite triple store with vector retrieval (replaced `memory_graph.py`) |
 | `provider_caps.py` | Model capability registry — vision, context window, cost, response_format |
 | `run_store.py` | SQLite persistence for runs, phase outputs, feedback |
 | `metrics_store.py` | JSONL metrics (latency, status) — thin wrapper over run_store eventually |
@@ -35,9 +36,12 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | `search_engine.py` | DuckDuckGo search for dispute resolution |
 | `blast_radius.py` | Reverse-dep analysis for changed files |
 | `project_graph.py` | AST-based project dependency graph |
-| `demo_catalog.py` | Preset council configurations for demos |
-| `demo_samples/` | Sample input files for demo presets |
-| `static/index.html` | Full frontend (~1300 lines, HTML/CSS/JS co-located) |
+| `src/llm_council/demo_catalog.py` | Preset council configurations for demos (source of truth: `src/llm_council/resources/presets.json`) |
+| `src/llm_council/resources/demo_samples/` | Sample input files for demo presets |
+| `src/llm_council/web/static/index.html` | Frontend markup shell only |
+| `src/llm_council/web/static/js/` | ES modules: `app.js` (boot+delegation), `state.js`, `events.js` (SSE dispatch), `render.js` (stances/gate/verdict/confidence), `config-panel.js`, `run.js`, `chat.js`, `replay.js`, `graphs.js`, `api.js`, `utils.js` |
+| `src/llm_council/web/static/css/main.css` | All styles |
+| `tests/eval/live_validation.py` | Live 3-scenario validation against real Ollama (STANCE emission, gate, rebuttal, grounding) |
 
 ## Architecture: 3-Phase Pipeline
 
@@ -64,19 +68,24 @@ User Input (topic + attachments)
         │
         ▼
 [Phase 3] Chairman Synthesis
-  All analyses + reviews → single chairman model → ChairmanDecision JSON
+  All analyses + reviews (+rebuttals) → single chairman model → ChairmanDecision JSON
   (verdict, risk_score, action_items, consensus, disputes)
+  grounding enforced (unattributed points stripped) → chairman_verdict event
+  council_confidence 0-100 event (diversity/agreement/grounding/parse; clones capped 45)
         │
         ▼
-SSE stream to UI + RunStore write + Memory extract (async)
+SSE stream to UI + RunStore write (incl. confidence metrics) + Memory extract (async)
 ```
 
 ## Database Schema (council_runs.db)
 
 ```sql
-runs(run_id PK, started_at, finished_at, status, topic, roster_json, fingerprint_hash, deep_debate, error)
-phase_outputs(run_id, phase, member_id, output, tokens_in, tokens_out, latency_ms)
+runs(run_id PK, started_at, finished_at, status, topic, roster_json, fingerprint_hash,
+     deep_debate, smart_phase_score, parse_tier, phase1_divergence, specificity_score,
+     grounding_ratio, council_confidence, stance_summary, error)
+phase_outputs(run_id, phase, member_id, output, tokens_in, tokens_out, latency_ms, finish_reason, attempt_number)
 run_feedback(run_id, action_index, rating, note, rated_at)
+skills(id PK, name, body, domain, source_run, confidence, used_count, created_at, embedding)
 ```
 
 ## Free-of-Cost Mandate
@@ -85,7 +94,7 @@ Every default flow runs on Ollama + local Python libraries. Cloud LLMs are opt-i
 
 ## Current MVP Phase
 
-Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-phase implementation briefs.
+Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `src/llm_council/resources/agent_prompts/` for per-phase implementation briefs.
 
 ## Coding Conventions
 
@@ -109,8 +118,9 @@ Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-ph
 
 ## Test Suite
 
-Run: `./venv/bin/pytest tests/ -q`
-Current: 30 tests passing. Tests use unittest stubs for litellm and httpx.
+Run: `./venv/bin/pytest tests/ -q --ignore=tests/eval` (Windows: `./venv/Scripts/python.exe -m pytest ...`)
+Current: 128 tests passing. Tests use unittest stubs for litellm and httpx.
+Live validation (needs Ollama): `python tests/eval/live_validation.py` — see `docs/REALITY_REPORT.md`.
 
 ## What NOT To Do
 
@@ -118,6 +128,8 @@ Current: 30 tests passing. Tests use unittest stubs for litellm and httpx.
 - Do not load the SentenceTransformer model more than once — use the shared singleton
 - Do not write keys or tokens to disk or logs — `redact_config()` must cover all serialization boundaries
 - Do not use `os.walk` + AST parsing in `blast_radius.py` — import from `project_graph.py`
-- Do not add new columns to SQLite tables without a migration path
-- Do not grow `index.html` further before extracting config to `presets.json`
-- Do not modify `memory_graph.py` during Phase 1 or Phase 1.5 — Phase 2 intentionally replaces it with `memory_store.py`
+- Do not add new columns to SQLite tables without a migration path (`migrations/` + `run_store._apply_migration`)
+- Do not render the chairman verdict in the UI by parsing `member_done` text — use the grounding-enforced `chairman_verdict` event
+- Do not add more rebuttal rounds — the debate is bounded to one by design
+- Do not mutate event dicts after yielding them from the orchestrator — yield copies
+- Do not weaken the stance fail-safe: an unmappable verdict must resolve to None → debate

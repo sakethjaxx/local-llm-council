@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from skill_registry import SkillRegistry
+from llm_council.skill_registry import SkillRegistry
 
 
 class _FakeEmbedder:
@@ -68,8 +68,8 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         async def fake_acompletion(*args, **kwargs):
             return _fake_completion('{"name":"Security Review","body":"Inspect auth boundaries.","domain":"security"}')
 
-        with patch("skill_registry.get_embedder", return_value=_FakeEmbedder()), \
-             patch("skill_registry.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.skill_registry.litellm.acompletion", side_effect=fake_acompletion):
             await self.registry.extract_skills("bad-run", "authentication vulnerability", "test-model")
 
         with self.registry._connection() as conn:
@@ -88,8 +88,8 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
             calls.append(kwargs)
             return _fake_completion(responses.pop(0))
 
-        with patch("skill_registry.get_embedder", return_value=_FakeEmbedder()), \
-             patch("skill_registry.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.skill_registry.litellm.acompletion", side_effect=fake_acompletion):
             await self.registry.extract_skills("good-run", "authentication vulnerability", "test-model")
 
         with self.registry._connection() as conn:
@@ -111,8 +111,8 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         async def fake_acompletion(*args, **kwargs):
             return _fake_completion(responses.pop(0))
 
-        with patch("skill_registry.get_embedder", return_value=_FakeEmbedder()), \
-             patch("skill_registry.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.skill_registry.litellm.acompletion", side_effect=fake_acompletion):
             await self.registry.extract_skills("sanity-run", "authentication vulnerability", "test-model")
 
         with self.registry._connection() as conn:
@@ -139,8 +139,8 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         async def fake_acompletion(*args, **kwargs):
             return _fake_completion(responses.pop(0))
 
-        with patch("skill_registry.get_embedder", return_value=_FakeEmbedder()), \
-             patch("skill_registry.litellm.acompletion", side_effect=fake_acompletion):
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.skill_registry.litellm.acompletion", side_effect=fake_acompletion):
             await self.registry.extract_skills("dedup-run", "authentication vulnerability", "test-model")
 
         with self.registry._connection() as conn:
@@ -218,8 +218,8 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-        with patch("skill_registry.get_embedder", return_value=_FakeEmbedder()), \
-             patch("skill_registry.litellm.acompletion") as llm_mock:
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()), \
+             patch("llm_council.skill_registry.litellm.acompletion") as llm_mock:
             skills = await self.registry.get_skills_for_topic("authentication vulnerability", top_k=1)
 
         self.assertEqual(skills[0]["name"], "Security Review")
@@ -244,7 +244,7 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-        with patch("skill_registry.get_embedder", return_value=_FakeEmbedder()):
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()):
             skills = await self.registry.get_skills_for_topic("authentication vulnerability", top_k=1)
             self.assertEqual(skills[0]["used_count"], 0)
             await asyncio.sleep(0.05)
@@ -252,6 +252,63 @@ class SkillRegistryTests(unittest.IsolatedAsyncioTestCase):
         with self.registry._connection() as conn:
             used_count = conn.execute("SELECT used_count FROM skills WHERE id = ?", (skills[0]["id"],)).fetchone()[0]
         self.assertEqual(used_count, 1)
+
+    async def test_feedback_downrates_skill_and_drops_retrieval_rank(self):
+        # Two skills equally similar to the topic; only rank difference is confidence.
+        self._insert_run_state("rated-run", risk_score=1)
+        self._insert_run_state("other-run", risk_score=1)
+        vector = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32).tobytes()
+        with self.registry._connection() as conn:
+            conn.execute(
+                "INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("Auth Skill A", "Inspect authentication boundaries.", "security", "rated-run", 0.6, 0, time.time(), vector),
+            )
+            conn.execute(
+                "INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("Auth Skill B", "Review authentication flows.", "security", "other-run", 0.6, 0, time.time(), vector),
+            )
+
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()):
+            before = await self.registry.get_skills_for_topic("authentication vulnerability", top_k=2)
+        self.assertEqual({s["name"] for s in before[:1]} | {before[1]["name"]}, {"Auth Skill A", "Auth Skill B"})
+
+        result = self.registry.apply_feedback("rated-run", "down")
+        self.assertEqual(result["adjusted"], 1)
+
+        with patch("llm_council.skill_registry.get_embedder", return_value=_FakeEmbedder()):
+            after = await self.registry.get_skills_for_topic("authentication vulnerability", top_k=2)
+        # The down-rated run's skill must now rank below the untouched one.
+        self.assertEqual(after[0]["name"], "Auth Skill B")
+        self.assertEqual(after[1]["name"], "Auth Skill A")
+        self.assertAlmostEqual(after[1]["confidence"], 0.45, places=6)
+
+    def test_feedback_thumbs_up_reinforces(self):
+        self._insert_run_state("up-run", risk_score=1)
+        with self.registry._connection() as conn:
+            conn.execute(
+                "INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("Skill", "Body.", None, "up-run", 0.5, 0, time.time(), np.array([0.1] * 4, dtype=np.float32).tobytes()),
+            )
+        self.registry.apply_feedback("up-run", "thumbs_up")
+        with self.registry._connection() as conn:
+            confidence = conn.execute("SELECT confidence FROM skills WHERE source_run = 'up-run'").fetchone()[0]
+        self.assertAlmostEqual(confidence, 0.55, places=6)
+
+    def test_feedback_confidence_floor(self):
+        self._insert_run_state("floor-run", risk_score=1)
+        with self.registry._connection() as conn:
+            conn.execute(
+                "INSERT INTO skills (name, body, domain, source_run, confidence, used_count, created_at, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("Skill", "Body.", None, "floor-run", 0.1, 0, time.time(), np.array([0.1] * 4, dtype=np.float32).tobytes()),
+            )
+        self.registry.apply_feedback("floor-run", "down")
+        with self.registry._connection() as conn:
+            confidence = conn.execute("SELECT confidence FROM skills WHERE source_run = 'floor-run'").fetchone()[0]
+        self.assertAlmostEqual(confidence, 0.05, places=6)
+
+    def test_feedback_unknown_rating_is_noop(self):
+        result = self.registry.apply_feedback("whatever", "meh")
+        self.assertEqual(result["adjusted"], 0)
 
     def test_format_skills_block_empty(self):
         self.assertEqual(self.registry.format_skills_block([]), "")

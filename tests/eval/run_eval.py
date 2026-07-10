@@ -14,10 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add src layout to path when running without an editable install.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from embeddings import get_embedder
+from llm_council.embeddings import get_embedder
 
 
 GOLDEN_PATH = Path(__file__).parent / "golden_topics.json"
@@ -64,7 +64,8 @@ def _build_eval_config(model: str) -> dict:
 
 
 async def eval_topic(topic_entry: dict, model: str) -> dict:
-    from orchestrator import CouncilOrchestrator, parse_chairman_response
+    from llm_council.chairman_result import parse_chairman_response
+    from llm_council.orchestrator import CouncilOrchestrator
 
     orch = CouncilOrchestrator()
     config = _build_eval_config(model)
@@ -72,6 +73,10 @@ async def eval_topic(topic_entry: dict, model: str) -> dict:
     start = time.time()
     chairman_raw = ""
     smart_phase_skipped = False
+    gate = None
+    rebuttal_fired = False
+    grounding_ratio = None
+    confidence_score = None
 
     async for event in orch.run(
         topic_text=topic_entry["topic"],
@@ -80,10 +85,24 @@ async def eval_topic(topic_entry: dict, model: str) -> dict:
         deep_debate=True,
         run_id=f"eval_{topic_entry['id']}_{int(start)}",
     ):
-        if event.get("type") == "phase_start" and event.get("phase") == 2:
+        etype = event.get("type")
+        if etype == "phase_start" and event.get("phase") == 2:
             label = event.get("label", "")
             smart_phase_skipped = "SKIPPED" in label
-        elif event.get("type") == "member_done" and event.get("member") == "chairman":
+        elif etype == "smart_phase_decision":
+            gate = {
+                "skip": event.get("skip"),
+                "split": event.get("split"),
+                "stance_sources": event.get("stance_sources", {}),
+                "stances_resolved": len(event.get("stances", {})),
+            }
+        elif etype == "rebuttal_start":
+            rebuttal_fired = True
+        elif etype == "chairman_grounding":
+            grounding_ratio = event.get("ratio")
+        elif etype == "council_confidence":
+            confidence_score = event.get("score")
+        elif etype == "member_done" and event.get("member") == "chairman":
             chairman_raw = event.get("full_text", "")
 
     latency = time.time() - start
@@ -97,6 +116,7 @@ async def eval_topic(topic_entry: dict, model: str) -> dict:
     score = cosine_sim(ref_emb, got_emb)
 
     passed = score >= topic_entry["minimum_score"]
+    native_stances = sum(1 for source in (gate or {}).get("stance_sources", {}).values() if source == "native")
     entry = {
         "topic_id": topic_entry["id"],
         "score": round(score, 4),
@@ -104,6 +124,12 @@ async def eval_topic(topic_entry: dict, model: str) -> dict:
         "passed": passed,
         "latency_s": round(latency, 2),
         "smart_phase_skipped": smart_phase_skipped,
+        "gate": gate,
+        "stance_native": native_stances,
+        "stance_resolved": (gate or {}).get("stances_resolved", 0),
+        "rebuttal_fired": rebuttal_fired,
+        "grounding_ratio": grounding_ratio,
+        "council_confidence": confidence_score,
         "verdict_length": len(chairman_verdict),
         "timestamp": time.time(),
         "model": model,
@@ -150,11 +176,18 @@ async def main():
     mean_score = sum(scores) / len(scores)
     skip_rate = sum(1 for result in results if result["smart_phase_skipped"]) / len(results)
     passed = sum(1 for result in results if result["passed"])
+    seats_total = 3 * len(results)
+    native_total = sum(result.get("stance_native", 0) for result in results)
+    resolved_total = sum(result.get("stance_resolved", 0) for result in results)
 
     print(f"\n{'=' * 50}")
     print(f"Results: {passed}/{len(results)} passed")
     print(f"Mean score: {mean_score:.3f}")
     print(f"Phase 2 skip rate: {skip_rate * 100:.0f}%")
+    print(f"STANCE native emission: {native_total}/{seats_total} ({native_total / seats_total * 100:.0f}%)")
+    print(f"STANCE resolved (native+fallback): {resolved_total}/{seats_total} ({resolved_total / seats_total * 100:.0f}%)")
+    if resolved_total < seats_total * 0.95:
+        print("\nWARNING: stance resolution below 95% — the gate degrades to always-debate.")
 
     if mean_score < 0.60:
         print("\nWARNING: Mean score below 0.60 — prompt or model quality degraded.")

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Council</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
+  <script type="text/javascript" src="https://unpkg.com/vis-network@10.1.0/standalone/umd/vis-network.min.js" integrity="sha384-Kp7cMaDnHOrgpE8FT6l7tUuGIo7kBcBVcttockpXN/whrsQBcy9ZcpKmr/1a/nMo" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/static/css/main.css?v=20260709-editable-names">
+</head>
+
+<body>
+  <div class="ambient-glow"></div>
+  <div class="ambient-glow-2"></div>
+
+  <header>
+    <div class="logo-mark">LLM COUNCIL</div>
+    <div class="title-group">
+      <h1>Project Review Council</h1>
+      <p>Local multi-model deliberation with visible reasoning and honest confidence.</p>
+    </div>
+    <div class="header-actions">
+      <details class="demo-menu">
+        <summary class="btn btn-small">Demo mode</summary>
+        <div class="demo-menu-panel">
+          <div class="section-title">Demo presets</div>
+          <div class="preset-grid" id="presetGrid"></div>
+          <div class="helper-copy">Optional demo paths. Real project review stays local-first by default.</div>
+        </div>
+      </details>
+      <label class="panel-size-control" for="panelWidthRange">
+        Menu size
+        <input type="range" id="panelWidthRange" min="320" max="560" step="10" value="390" aria-label="Menu size">
+      </label>
+      <button class="btn btn-small" data-action="open-replay">Replay runs</button>
+      <button class="btn btn-small" data-action="view-code-graph">View code graph</button>
+      <button class="btn btn-small" data-action="view-memory">View memory graph</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- LEFT PANEL: CONFIG -->
+    <aside class="config-panel" aria-label="Council configuration">
+      <div>
+        <div class="section-title">
+          Preflight
+          <button class="btn btn-small" data-action="refresh-preflight">Refresh checks</button>
+        </div>
+        <div class="status-card" id="preflightBox" aria-live="polite">
+          <div class="status-line">Checking local models and input compatibility...</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">1. Context / Topic</div>
+        <label class="visually-hidden" for="topicText">Topic or context for the council</label>
+        <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or a focused review request..."></textarea>
+        <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos. Text-like files are folded into the council prompt; image files are sent as visual inputs when the model supports them.</div>
+        <input type="file" id="attachmentInput" aria-label="Attach files for council review" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
+        <div class="helper-copy">For a whole folder, use the local project scanner below. Browser folder upload is also available for small focused folders.</div>
+        <input type="file" id="folderInput" aria-label="Attach a folder for council review" multiple webkitdirectory directory>
+        <div class="file-list" id="fileList"></div>
+        <div class="inline-actions" id="sampleActions"></div>
+      </div>
+
+      <div>
+        <div class="section-title">1.5 Review Local Folder</div>
+        <div class="project-review-inline" id="projectReviewSection">
+          <div class="helper-copy" style="margin-bottom: 8px;">Enter an absolute path to a local project directory. The scanner builds a code graph, picks the connected files, and reviews them without cloud services.</div>
+          <div style="display:flex; gap: 8px; align-items:center;">
+            <label class="visually-hidden" for="projectPathInput">Project directory path</label>
+            <input type="text" id="projectPathInput" placeholder="C:\Users\you\projects\my-app" style="flex:1; padding: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); outline: none;">
+            <button class="btn btn-solid" id="projectReviewBtn" data-action="launch-project-review" style="white-space:nowrap;">Scan &amp; Review</button>
+          </div>
+          <div class="inline-actions">
+            <button class="btn btn-small" data-action="launch-self-review">Self-check this app</button>
+          </div>
+          <div id="projectScanInfo" style="margin-top: 8px; font-size: 12px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">2. Deliberation Mode</div>
+        <div class="mode-selector" role="radiogroup" aria-label="Deliberation mode">
+          <div class="mode-option" role="radio" tabindex="0" data-action="set-mode" data-mode="fast" aria-checked="true">
+            <div class="mode-name">Fast</div>
+            <div class="mode-desc">3 independent opinions in parallel. No debate, no cross-examination - quickest answer, weakest guarantee.</div>
+          </div>
+          <div class="mode-option" role="radio" tabindex="0" data-action="set-mode" data-mode="deliberate" aria-checked="false">
+            <div class="mode-name">Deliberate</div>
+            <div class="mode-desc">Full council: stance gate, cross-review when seats disagree, one rebuttal round, grounded verdict. Slower, trustworthy.</div>
+          </div>
+        </div>
+        <label style="color:var(--muted); font-size: 13px; display:inline-block; margin-top:10px;">
+          <input type="checkbox" id="dynamicSwarmToggle"> Dynamic Swarm (LLM generates the roster)
+        </label>
+      </div>
+
+      <div>
+        <div class="section-title">3. Model Profile</div>
+        <div class="inline-actions">
+          <button class="btn btn-small choice-button" data-action="apply-model-profile" data-profile="turbo" aria-pressed="false">Turbo / low latency</button>
+          <button class="btn btn-small choice-button" data-action="apply-model-profile" data-profile="balanced" aria-pressed="false">Balanced</button>
+          <button class="btn btn-small choice-button" data-action="apply-model-profile" data-profile="quality" aria-pressed="false">Quality</button>
+        </div>
+        <div class="helper-copy">Profiles swap the council between smaller and larger local Ollama models. You can still override any seat manually.</div>
+      </div>
+
+      <div>
+        <div class="section-title">3.5 Token Budget</div>
+        <div class="inline-actions">
+          <button class="btn btn-small choice-button" data-action="set-token-budget" data-profile="economy" aria-pressed="false">Economy</button>
+          <button class="btn btn-small choice-button" data-action="set-token-budget" data-profile="balanced" aria-pressed="true">Balanced</button>
+          <button class="btn btn-small choice-button" data-action="set-token-budget" data-profile="performance" aria-pressed="false">Performance</button>
+        </div>
+        <div class="helper-copy" id="tokenBudgetSummary">Balanced profile: standard council token caps.</div>
+      </div>
+
+      <details class="advanced-cloud">
+        <summary>Advanced cloud keys (opt-in)</summary>
+        <div class="cloud-key-grid">
+          <div class="cloud-key-row">
+            <label class="cloud-key-label" for="keyOpenAI">OpenAI</label>
+            <input type="password" id="keyOpenAI" class="cloud-key-input" placeholder="sk-..." autocomplete="off">
+          </div>
+          <div class="cloud-key-row">
+            <label class="cloud-key-label" for="keyAnthropic">Anthropic</label>
+            <input type="password" id="keyAnthropic" class="cloud-key-input" placeholder="sk-ant-..." autocomplete="off">
+          </div>
+          <div class="cloud-key-row">
+            <label class="cloud-key-label" for="keyGemini">Gemini</label>
+            <input type="password" id="keyGemini" class="cloud-key-input" placeholder="AIza..." autocomplete="off">
+          </div>
+          <div class="cloud-key-row">
+            <label class="cloud-key-label" for="keyGroq">Groq</label>
+            <input type="password" id="keyGroq" class="cloud-key-input" placeholder="gsk_..." autocomplete="off">
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button class="btn btn-small" data-action="clear-cloud-keys">Clear keys</button>
+        </div>
+        <div class="helper-copy">Stored in this browser only. Keys are sent as request headers and are not written to server-side disk state. The default council is fully local and needs no keys.</div>
+      </details>
+
+      <div>
+        <div class="section-title">
+          5. Council Roster
+          <div>
+            <button class="btn btn-small" data-action="auto-configure-hardware" style="margin-right: 8px;">Auto-tune hardware</button>
+            <button class="btn btn-small" data-action="add-seat">Add seat</button>
+          </div>
+        </div>
+        <div class="seat-list" id="seatList"></div>
+      </div>
+
+      <div class="run-actions">
+        <button class="btn btn-solid" id="launchBtn" data-action="launch-council" style="font-size: 16px; padding: 15px;">
+          Run council
+        </button>
+        <button class="btn btn-danger" id="stopRunBtn" data-action="stop-run" hidden>
+          Stop
+        </button>
+      </div>
+
+
+    </aside>
+
+    <!-- RIGHT PANEL: OUTPUT -->
+    <section class="council-panel" id="councilPanel" aria-live="polite" aria-label="Council deliberation">
+      <div class="panel-empty">
+        <div>Ready for a project brief.</div>
+        <div class="helper-copy">Choose a preset, attach context, then run the council.</div>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-overlay" id="memoryModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span id="modalTitle">Knowledge graph</span>
+        <button class="btn btn-small" data-action="close-memory" aria-label="Close graph modal">x</button>
+      </div>
+      <div id="memoryNetwork"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="replayModal" role="dialog" aria-modal="true" aria-label="Run replay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>Run replay</span>
+        <button class="btn btn-small" data-action="close-replay" aria-label="Close replay modal">x</button>
+      </div>
+      <div class="replay-layout">
+        <div class="replay-sidebar" id="replayRunList">
+          <div class="replay-empty">Loading past runs...</div>
+        </div>
+        <div class="replay-detail" id="replayRunDetail">
+          <div class="replay-empty">Select a run to inspect its phases.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/js/app.js?v=20260709-editable-names"></script>
+</body>
+</html>

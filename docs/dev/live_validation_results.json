@@ -1,0 +1,178 @@
+{
+  "timestamp": 1783354508.9324036,
+  "results": [
+    {
+      "id": "expected_agree",
+      "expectation": "all seats PROCEED, gate skips cross-review",
+      "gate": {
+        "skip": false,
+        "reason": "Stances split (pragmatist=PROCEED, skeptic=HOLD, optimist=PROCEED) \u2014 running cross-review and rebuttal.",
+        "stances": {
+          "pragmatist": {
+            "verdict": "PROCEED",
+            "confidence": 9,
+            "summary": "Given the minimal cost, practical implementation feasibility, and significant benefits in terms of data protection and operational continuity, proceeding with automated backups remains prudent, while addressing the identified areas for improvement through a thorough risk assessment and robust training plans."
+          },
+          "skeptic": {
+            "verdict": "HOLD",
+            "confidence": 6,
+            "summary": "Given the severity of potential failures without adequate risk mitigation strategies, we must proceed with caution before proceeding with this proposal. A comprehensive risk assessment and mitigation plan will be crucial for ensuring successful implementation."
+          },
+          "optimist": {
+            "verdict": "MIXED",
+            "confidence": 6,
+            "summary": "While automated backups offer significant value and align with our product's momentum, I acknowledge the importance of comprehensive risk mitigation and the need for additional exploration of potential failure modes and regulatory compliance."
+          }
+        },
+        "stance_sources": {
+          "pragmatist": "rebuttal",
+          "skeptic": "rebuttal",
+          "optimist": "rebuttal"
+        },
+        "split": true
+      },
+      "rebuttal_fired": true,
+      "rebuttal_result": {
+        "converged": false
+      },
+      "grounding": {
+        "ratio": 0.75,
+        "removed": 0,
+        "kept": 4,
+        "enforced": false
+      },
+      "verdict": {
+        "verdict": "Proceed with automated backups but ensure a thorough risk assessment is conducted, including addressing team capacity and training needs.",
+        "parse_tier": "json",
+        "consensus_points": 2,
+        "dispute_points": 2
+      },
+      "confidence": {
+        "score": 77,
+        "agreement_state": "split_unresolved",
+        "explanation": "seats split and did not converge"
+      },
+      "phase2_skipped": false,
+      "errors": [],
+      "latency_s": 1209.5
+    },
+    {
+      "id": "contested",
+      "expectation": "seats split, debate + rebuttal fire",
+      "gate": {
+        "skip": false,
+        "reason": "Stances split (pragmatist=PROCEED, optimist=HOLD, skeptic=HOLD) \u2014 running cross-review and rebuttal.",
+        "stances": {
+          "pragmatist": {
+            "verdict": "PROCEED",
+            "confidence": 8,
+            "summary": ""
+          },
+          "optimist": {
+            "verdict": "HOLD",
+            "confidence": 7,
+            "summary": "While I acknowledge the Systems Engineer's technical risk assessment and the Risk Assessor's emphasis on long-term implications, I remain committed to prioritizing fairness and transparency in our AI model deployment."
+          },
+          "skeptic": {
+            "verdict": "HOLD",
+            "confidence": 7,
+            "summary": "I remain convinced that immediate prioritization is needed to ensure fairness in our model deployment."
+          }
+        },
+        "stance_sources": {
+          "pragmatist": "rebuttal",
+          "optimist": "rebuttal",
+          "skeptic": "rebuttal"
+        },
+        "split": true
+      },
+      "rebuttal_fired": true,
+      "rebuttal_result": {
+        "converged": false
+      },
+      "grounding": {
+        "ratio": 1.0,
+        "removed": 0,
+        "kept": 4,
+        "enforced": false
+      },
+      "verdict": {
+        "verdict": "Hold until we address the accuracy gap for minority demographic groups, as the risk of perpetuating societal inequalities outweighs any perceived short-term benefits. We need to prioritize fairness an",
+        "parse_tier": "json",
+        "consensus_points": 2,
+        "dispute_points": 2
+      },
+      "confidence": {
+        "score": 84,
+        "agreement_state": "split_unresolved",
+        "explanation": "seats split and did not converge"
+      },
+      "phase2_skipped": false,
+      "errors": [],
+      "latency_s": 1220.0
+    },
+    {
+      "id": "ambiguous",
+      "expectation": "MIXED stances plausible, debate fires",
+      "gate": {
+        "skip": false,
+        "reason": "Stances split (pragmatist=HOLD, optimist=PROCEED, skeptic=HOLD) \u2014 running cross-review and rebuttal.",
+        "stances": {
+          "pragmatist": {
+            "verdict": "HOLD",
+            "confidence": 9,
+            "summary": "We now understand the importance of user experience and the need for detailed cost projections in our analysis, reinforcing our stance that a microservices approach introduces unnecessary operational and scalability risks given our team's current capacity and cost constraints."
+          },
+          "optimist": {
+            "verdict": "MIXED",
+            "confidence": 7,
+            "summary": "Acknowledging peer critiques while standing by original recommendation."
+          },
+          "skeptic": {
+            "verdict": "HOLD",
+            "confidence": 7,
+            "summary": "The Risk Assessment will be reconsidered with an emphasis on both user impact and speed-to-market considerations."
+          }
+        },
+        "stance_sources": {
+          "pragmatist": "rebuttal",
+          "optimist": "rebuttal",
+          "skeptic": "rebuttal"
+        },
+        "split": true
+      },
+      "rebuttal_fired": true,
+      "rebuttal_result": {
+        "converged": false
+      },
+      "grounding": {
+        "ratio": 0.75,
+        "removed": 0,
+        "kept": 4,
+        "enforced": false
+      },
+      "verdict": {
+        "verdict": "HOLD",
+        "parse_tier": "json",
+        "consensus_points": 2,
+        "dispute_points": 2
+      },
+      "confidence": {
+        "score": 77,
+        "agreement_state": "split_unresolved",
+        "explanation": "seats split and did not converge"
+      },
+      "phase2_skipped": false,
+      "errors": [],
+      "latency_s": 1626.6
+    }
+  ],
+  "stance_stats": {
+    "seats_total": 9,
+    "native": 0,
+    "fallback": 0,
+    "missing": 9,
+    "native_rate": 0.0,
+    "recovered_rate": 0.0
+  }
+}

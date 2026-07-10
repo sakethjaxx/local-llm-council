@@ -127,10 +127,10 @@ def _install_test_stubs():
 
 _install_test_stubs()
 os.environ["COUNCIL_METRICS_FILE"] = ""
-main = importlib.import_module("main")
-from cloud_keys import get_cloud_keys
-from metrics_store import metrics_store
-from shutdown_state import clear_shutdown_request
+main = importlib.import_module("llm_council.main")
+from llm_council.cloud_keys import get_cloud_keys
+from llm_council.metrics_store import metrics_store
+from llm_council.shutdown_state import clear_shutdown_request
 
 
 class MainApiTests(unittest.IsolatedAsyncioTestCase):
@@ -338,7 +338,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             yield {"type": "done"}
 
         with patch.object(main, "ensure_models_for_config", side_effect=[ready_status, routed_missing_status, ready_status]), \
-             patch("router_agent.generate_swarm", return_value={
+             patch("llm_council.router_agent.generate_swarm", return_value={
                  "architect": {"label": "A", "model": "ollama/qwen2.5:7b", "color": "#111", "icon": "A", "persona": "a"},
                  "security": {"label": "S", "model": "ollama/gemma2:9b", "color": "#222", "icon": "S", "persona": "s"},
                  "perf": {"label": "P", "model": "ollama/qwen2.5:7b", "color": "#333", "icon": "P", "persona": "p"},
@@ -371,7 +371,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             yield {"type": "done"}
 
         with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
-             patch("router_agent.generate_swarm", return_value=None), \
+             patch("llm_council.router_agent.generate_swarm", return_value=None), \
              patch.object(main.CouncilOrchestrator, "run", new=fake_run):
             response = await main.council_stream(self.empty_request, topic_text="route me", dynamic_swarm=True)
             payload = await self._read_stream(response)

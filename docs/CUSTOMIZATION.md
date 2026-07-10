@@ -2,7 +2,7 @@
 
 ## Custom personas
 
-A council config is a JSON object mapping seat ids to seat configs. Pass it as the `council_config` form field on `/council/stream`, or add it to `presets.json`:
+A council config is a JSON object mapping seat ids to seat configs. Pass it as the `council_config` form field on `/council/stream`, or add it to `src/llm_council/resources/presets.json`:
 
 ```json
 {
@@ -25,13 +25,13 @@ Rules: every seat needs `model` and `persona`; the `chairman` seat is required; 
 
 ## Adding a model or provider
 
-Models route through LiteLLM, so any LiteLLM-supported model id works (`ollama/mistral`, `gpt-4o-mini`, `claude-fable-5`, ...). To make the app aware of a model's capabilities (context window, vision, response_format, strengths), add an entry to `MODELS` in `provider_caps.py`. Unknown models fall back to conservative defaults.
+Models route through LiteLLM, so any LiteLLM-supported model id works (`ollama/mistral`, `gpt-4o-mini`, `claude-fable-5`, ...). To make the app aware of a model's capabilities (context window, vision, response_format, strengths), add an entry to `MODELS` in `src/llm_council/provider_caps.py`. Unknown models fall back to conservative defaults.
 
 Cloud keys are supplied per-request via headers (see [API.md](API.md)) or `.env`.
 
 ## Tweaking phase prompts
 
-Prompts live in `agent_prompts/phase_prompts/`:
+Prompts live in `src/llm_council/resources/agent_prompts/phase_prompts/`:
 
 - `phase1_analyze.txt` — independent analysis (receives `{persona}`)
 - `phase2_review.txt` — peer critique (receives `{persona}`)
@@ -41,7 +41,7 @@ Edit and restart. Keep `{persona}` placeholders, and keep phase 3 demanding JSON
 
 ## Token budgets
 
-Profiles are defined in `budget_profiles.py` and selected per-run with the `token_budget_profile` form field. Add a profile there to change per-phase output limits.
+Profiles are defined in `src/llm_council/budget_profiles.py` and selected per-run with the `token_budget_profile` form field. Add a profile there to change per-phase output limits.
 
 ## Smart phase threshold
 

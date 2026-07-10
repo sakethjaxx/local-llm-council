@@ -22,6 +22,7 @@ if (-not (Test-Path "venv")) {
 
 Write-Host "Installing dependencies (first run can take a few minutes)..." -ForegroundColor Yellow
 & ".\venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements.txt
+$env:PYTHONPATH = (Join-Path (Get-Location) "src")
 
 if (-not (Test-Path ".env") -and (Test-Path "env.example")) {
     Copy-Item "env.example" ".env"
@@ -39,4 +40,4 @@ try {
 }
 
 Write-Host "Server starting on http://localhost:8765" -ForegroundColor Cyan
-& ".\venv\Scripts\python.exe" main.py
+& ".\venv\Scripts\python.exe" -m llm_council.main

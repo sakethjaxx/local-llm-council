@@ -30,6 +30,7 @@ fi
 
 echo "Installing dependencies (first run can take a few minutes)..."
 ./venv/bin/python -m pip install -q --disable-pip-version-check -r requirements.txt
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [ ! -f ".env" ] && [ -f "env.example" ]; then
   cp env.example .env
@@ -46,4 +47,4 @@ else
 fi
 
 echo "Server starting on http://localhost:8765"
-exec ./venv/bin/python main.py
+exec ./venv/bin/python -m llm_council.main

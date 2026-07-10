@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from project_fingerprint import fingerprint
+from llm_council.project_fingerprint import fingerprint
 
 
 class FingerprintTests(unittest.TestCase):

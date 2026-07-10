@@ -1,6 +1,6 @@
 # LLM Council
 
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://img.shields.io/badge/tests-pytest-green)
 ![Runtime](https://img.shields.io/badge/runtime-local--first-informational)
@@ -15,6 +15,8 @@ Run several local or optional cloud LLMs as a structured review council. Each mo
 
 - [What It Does](#what-it-does)
 - [Quick Start](#quick-start)
+- [Run A Council](#run-a-council)
+- [Docker](#docker)
 - [Configuration](#configuration)
 - [Deployment Modes](#deployment-modes)
 - [Security Notes](#security-notes)
@@ -25,23 +27,128 @@ Run several local or optional cloud LLMs as a structured review council. Each mo
 ## What It Does
 
 - Runs a council of local and optional cloud models in parallel, then produces a final synthesized verdict.
+- Makes the deliberation visible and verifiable: every seat stakes an explicit stance
+  (PROCEED/HOLD/MIXED), a consensus gate skips debate only on genuine unanimity, splits
+  trigger cross-review plus one bounded rebuttal round, and the chairman's verdict is
+  grounding-enforced — consensus claims that no member actually made are stripped.
+- Reports an honest **Council Confidence** score (0–100) per run, combining seat
+  diversity, agreement path, verdict grounding, and parse quality. A council of clones
+  (all seats on one model) is capped at 45 and warned about — agreement between copies
+  of the same model is weak evidence.
 - Streams council progress live in the browser and supports prompt, file, and image-assisted workflows.
-- Persists runs for replay, export, feedback, and metrics tracking.
+- Persists runs for replay, export, feedback, and metrics tracking. Thumbs-down feedback
+  lowers the retrieval rank of skills learned from that run — ratings change future councils.
 - Uses Ollama for local model execution and supports configurable model rosters and token budgets.
 
+Two modes, honestly labeled: **Fast** (3 independent opinions, no debate) and
+**Deliberate** (stance gate → cross-review → rebuttal → grounded verdict).
+
 ## Quick Start
+
+The startup script is the easiest path. It creates the virtual environment, installs dependencies, copies `env.example` to `.env`, checks Ollama, and starts the FastAPI server.
 
 ```bash
 git clone <repo-url>
 cd local-llm-council
-./start.sh        # Windows: .\start.ps1
+./start.sh
 ```
 
-Then open http://localhost:8765. The script creates the venv, installs dependencies, sets up `.env`, and checks for Ollama.
+On Windows PowerShell:
+
+```powershell
+.\start.ps1
+```
+
+Then open http://localhost:8765.
 
 Need a local model? Install [Ollama](https://ollama.com/download) and run `ollama pull llama3.2` — the app tells you exactly which models it needs if any are missing. See `docs/FIRST_RUN.md` for a walkthrough.
 
-### Docker
+## Run A Council
+
+1. Install Python 3.12+ and [Ollama](https://ollama.com/download).
+
+2. Start Ollama. The desktop app usually starts it automatically; otherwise run:
+
+```bash
+ollama serve
+```
+
+3. Pull at least one local model:
+
+```bash
+ollama pull llama3.2
+```
+
+The app checks the configured council roster before each run. If a model is missing, the UI returns the exact `ollama pull ...` command to run. You can also set `COUNCIL_BOOTSTRAP_LOCAL_MODELS=true` in `.env` to let the app auto-pull local models.
+
+4. Start the server from the repo root:
+
+```bash
+./start.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+.\start.ps1
+```
+
+Manual start, useful when the virtual environment already exists:
+
+```bash
+python -m venv venv
+./venv/bin/python -m pip install -r requirements.txt
+PYTHONPATH=src ./venv/bin/python -m llm_council.main
+```
+
+On Windows PowerShell:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:PYTHONPATH = "$PWD\src"
+.\venv\Scripts\python.exe -m llm_council.main
+```
+
+5. Open http://localhost:8765 in your browser.
+
+6. Enter a topic or question, optionally attach files/images, choose Fast or Deep Debate, and press **Run Council**.
+
+7. Watch the seats stream their analysis. Fast mode collects independent opinions and moves to the chairman. Deep Debate can add cross-review and one rebuttal round before the chairman verdict.
+
+8. Review the final chairman verdict, grounded claims, council confidence, action items, and saved run history. Runs are stored locally in `council_runs.db`.
+
+Quick health checks:
+
+```bash
+curl http://localhost:8765/health
+curl http://localhost:8765/health/ready
+curl http://localhost:8765/ollama/status
+```
+
+## Repository layout
+
+Application code uses a standard `src/` package layout:
+
+- `src/llm_council/` - Python package and FastAPI application
+- `src/llm_council/web/static/` - buildless frontend assets
+- `src/llm_council/resources/` - prompts, presets, and demo samples
+- `tests/` - unit and integration tests
+- `docs/` - architecture, API, and customization notes
+
+On Windows PowerShell, use `curl.exe` if `curl` resolves to `Invoke-WebRequest`.
+
+Optional direct API smoke test:
+
+```bash
+curl -N -X POST http://localhost:8765/council/stream \
+  -F "topic_text=Should we ship this change?" \
+  -F "deep_debate=false"
+```
+
+See `docs/FIRST_RUN.md` for a longer first-run walkthrough.
+
+## Docker
 
 ```bash
 COUNCIL_API_KEY=change-me docker compose up
@@ -88,11 +195,14 @@ The local eval harness under `tests/eval/` is separate because it requires Ollam
 
 ## Docs
 
-- `docs/FIRST_RUN.md` — Ollama setup walkthrough
-- `docs/API.md` — HTTP endpoints with curl examples
+- `docs/FIRST_RUN.md` — Ollama setup walkthrough (the UI also has an in-app guided setup)
+- `docs/API.md` — HTTP endpoints with curl examples, full SSE event contract
 - `docs/CUSTOMIZATION.md` — personas, providers, prompts
 - `docs/TROUBLESHOOTING.md` — common issues and fixes
 - `docs/ARCHITECTURE.md` — how it works
+- `docs/SCOPE.md` — what this product is (and is not)
+- `docs/REALITY_REPORT.md` — live-model validation results vs. code assumptions
+- `docs/ROADMAP.md` — deliberately deferred work
 
 ## Contributing
 

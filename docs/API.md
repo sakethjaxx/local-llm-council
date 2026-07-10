@@ -22,9 +22,17 @@ SSE events (one JSON object per `data:` line):
 | `member_thinking` | `member`, `meta` (seat config) |
 | `member_token` | `member`, `chunk` (streamed text) |
 | `member_done` | `member`, `full_text` |
+| `smart_phase_decision` | deep-debate only: `skip`, `reason`, `split`, `stances` (per member: `verdict`, `confidence`, `summary`), `stance_sources` (per member: `native` \| `fallback`), `score` (cosine divergence telemetry) |
+| `rebuttal_start` | `label` — fires only when stances split |
+| `rebuttal_result` | `converged` (bool), `stances` (post-rebuttal, source `rebuttal`) |
+| `chairman_grounding` | `ratio` (0–1 or null), `removed`, `kept`, `enforced` — unattributed consensus/dispute points are stripped when ratio < 0.5 |
+| `chairman_verdict` | the enforced verdict: `verdict`, `risk_score`, `action_items`, `consensus`, `disputes`, `parse_tier`, `removed_points` |
+| `council_confidence` | `score` (0–100), `components` (diversity/agreement/grounding/parse, each 0–1), `agreement_state`, `clone_capped`, `explanation`, `stances`, `stance_sources` |
 | `swarm_routed` | new roster (dynamic swarm only) |
 | `warning` / `error` | `message` |
 | `done` | run finished |
+
+Trust semantics: render the verdict from `chairman_verdict` (grounding-enforced), not by parsing `member_done` full text. A single-model council is capped at confidence 45 (`clone_capped: true`).
 
 Keep-alive comments (`: keep-alive`) are sent every 20s of silence.
 
@@ -54,13 +62,19 @@ DELETE /runs/{run_id}
 POST   /runs/{run_id}/feedback        # {"action_index": 0, "rating": "up", "note": ""}
 ```
 
+Feedback closes a learning loop: `rating: "down"` lowers the confidence of skills
+extracted from that run (−0.15, floor 0.05), dropping their retrieval rank in future
+councils; `"up"` reinforces (+0.05, cap 1.0). The response includes `skills_adjusted`.
+
 ## Metrics
 
 ```bash
 GET /metrics/runs?limit=20     # recent runs with latency/status
 GET /metrics/summary           # aggregates
-GET /metrics/quality?limit=100 # parse tier, divergence, specificity per run
+GET /metrics/quality?limit=100 # parse tier, divergence, specificity, grounding, confidence per run
 ```
+
+`/metrics/quality` summary includes `avg_grounding_ratio` and `avg_council_confidence`.
 
 ## Config & status
 

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from blast_radius import calculate_blast_radius
+from llm_council.blast_radius import calculate_blast_radius
 
 
 class BlastRadiusTests(unittest.TestCase):

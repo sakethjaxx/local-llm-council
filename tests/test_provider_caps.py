@@ -1,6 +1,6 @@
 import unittest
 
-from provider_caps import MODELS, PROVIDERS, caps_for, supports_image_input
+from llm_council.provider_caps import MODELS, PROVIDERS, caps_for, supports_image_input
 
 
 class ProviderCapsTests(unittest.TestCase):

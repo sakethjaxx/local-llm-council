@@ -17,7 +17,7 @@ class EmbeddingsTests(unittest.TestCase):
         module.SentenceTransformer = FakeSentenceTransformer
         sys.modules["sentence_transformers"] = module
 
-        import embeddings
+        import llm_council.embeddings as embeddings
 
         embeddings._embedder = None
         self.embeddings = embeddings

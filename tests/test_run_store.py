@@ -1,18 +1,11 @@
-import os
-import tempfile
 import unittest
 
-from run_store import RunStore
+from llm_council.run_store import RunStore
 
 
 class RunStoreTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = os.path.join(self.temp_dir.name, "runs.db")
-        self.store = RunStore(self.db_path)
-
-    def tearDown(self):
-        self.temp_dir.cleanup()
+        self.store = RunStore(":memory:")
 
     def test_run_lifecycle_and_phase_outputs(self):
         roster = {"architect": {"model": "ollama/qwen2.5:7b", "persona": "review"}}
@@ -79,7 +72,12 @@ class RunStoreTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in rows],
-            ["001_smart_phase_score", "002_phase_output_observability", "003_quality_metrics"],
+            [
+                "001_smart_phase_score",
+                "002_phase_output_observability",
+                "003_quality_metrics",
+                "004_confidence_metrics",
+            ],
         )
 
     def test_quality_metrics_lifecycle(self):
@@ -95,6 +93,22 @@ class RunStoreTests(unittest.TestCase):
         self.assertEqual(run["specificity_score"], 0.8)
         self.assertEqual(quality["runs"][0]["run_id"], "quality-run")
         self.assertEqual(quality["summary"]["parse_tiers"], {"json": 1})
+
+    def test_confidence_metrics_lifecycle(self):
+        self.store.begin_run("conf-run", "topic", {}, deep_debate=True)
+        self.store.update_confidence_metrics(
+            "conf-run", 0.8, 72, '{"stances": {"a": {"verdict": "PROCEED"}}, "agreement": "unanimous"}'
+        )
+        self.store.finish_run("conf-run", "completed")
+
+        run = self.store.get_run("conf-run")
+        self.assertEqual(run["grounding_ratio"], 0.8)
+        self.assertEqual(run["council_confidence"], 72)
+        self.assertEqual(run["stance_summary"]["agreement"], "unanimous")
+
+        quality = self.store.list_quality_metrics()
+        self.assertEqual(quality["summary"]["avg_grounding_ratio"], 0.8)
+        self.assertEqual(quality["summary"]["avg_council_confidence"], 72)
 
 
 if __name__ == "__main__":

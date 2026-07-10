@@ -14,10 +14,8 @@ if "litellm" not in sys.modules:
     litellm_stub.acompletion = _unused_acompletion
     sys.modules["litellm"] = litellm_stub
 
-import io_parser
-import router_agent
-
-
+import llm_council.io_parser as io_parser
+import llm_council.router_agent as router_agent
 class _FakeMessage:
     def __init__(self, content):
         self.content = content

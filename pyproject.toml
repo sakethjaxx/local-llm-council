@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "llm-council"
 version = "0.1.0"
@@ -26,4 +30,17 @@ dependencies = [
 ]
 
 [project.scripts]
-council = "cli:main"
+council = "llm_council.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+llm_council = [
+  "web/static/**/*",
+  "resources/**/*",
+]
