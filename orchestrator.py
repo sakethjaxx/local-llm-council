@@ -242,6 +242,25 @@ def _specificity_score(chairman_result: dict, raw_text: str) -> float:
     return round(min(1.0, (scored_items / len(action_items)) + structure_bonus), 3)
 
 
+_RETRYABLE_ERROR_MARKERS = (
+    "timeout", "timed out", "rate limit", "service unavailable",
+    "503", "502", "429", "connection", "reset by peer",
+)
+_PERMANENT_ERROR_MARKERS = (
+    "model not found", "not found", "invalid api key", "unauthorized",
+    "401", "403", "no such model", "pull model",
+)
+
+
+def _classify_llm_error(error_msg: str) -> tuple[bool, bool]:
+    """Return (is_retryable, is_permanent) for an LLM-call exception message."""
+    low = error_msg.lower()
+    return (
+        any(marker in low for marker in _RETRYABLE_ERROR_MARKERS),
+        any(marker in low for marker in _PERMANENT_ERROR_MARKERS),
+    )
+
+
 # Make litellm not spam the console
 litellm.suppress_debug_info = True
 
@@ -479,15 +498,7 @@ class CouncilOrchestrator:
                     "llm_call_attempt_failed",
                     extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label"), "attempt": attempt + 1, "error": error_msg},
                 )
-                error_lower = error_msg.lower()
-                is_retryable = any(marker in error_lower for marker in [
-                    "timeout", "timed out", "rate limit", "service unavailable",
-                    "503", "502", "429", "connection", "reset by peer"
-                ])
-                is_permanent = any(marker in error_lower for marker in [
-                    "model not found", "not found", "invalid api key", "unauthorized",
-                    "401", "403", "no such model", "pull model"
-                ])
+                is_retryable, is_permanent = _classify_llm_error(error_msg)
                 metrics_store.record_llm_call(
                     run_id=run_id,
                     member_id=member_id,
@@ -985,15 +996,7 @@ class CouncilOrchestrator:
                     "chat_call_attempt_failed",
                     extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "attempt": attempt + 1, "error": error_msg},
                 )
-                error_lower = error_msg.lower()
-                is_retryable = any(marker in error_lower for marker in [
-                    "timeout", "timed out", "rate limit", "service unavailable",
-                    "503", "502", "429", "connection", "reset by peer"
-                ])
-                is_permanent = any(marker in error_lower for marker in [
-                    "model not found", "not found", "invalid api key", "unauthorized",
-                    "401", "403", "no such model", "pull model"
-                ])
+                is_retryable, is_permanent = _classify_llm_error(error_msg)
                 metrics_store.record_llm_call(
                     run_id=run_id,
                     member_id=member_id,

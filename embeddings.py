@@ -1,5 +1,7 @@
 import threading
 
+import numpy as np
+
 from logging_utils import get_logger
 
 
@@ -20,3 +22,11 @@ def get_embedder():
                 logger.info("embedder_loading", extra={"model": "all-MiniLM-L6-v2"})
                 _embedder = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedder
+
+
+def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    left_norm = float(np.linalg.norm(left))
+    right_norm = float(np.linalg.norm(right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return float(np.dot(left, right) / (left_norm * right_norm))

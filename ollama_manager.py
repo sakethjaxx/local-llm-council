@@ -54,11 +54,6 @@ def get_required_models(config: dict | None = None) -> list[str]:
     return list(_iter_ollama_models(config))
 
 
-def get_missing_models(config: dict | None = None) -> list[str]:
-    installed = set(get_installed_models())
-    return [model for model in get_required_models(config) if model not in installed]
-
-
 def pull_model(tag: str) -> dict:
     try:
         result = subprocess.run(

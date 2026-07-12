@@ -88,8 +88,3 @@ async def should_skip(analyses: dict) -> tuple[bool, float]:
     except Exception as e:
         logger.exception("smart_phase_failed", extra={"error": str(e)})
         return False, 0.0
-
-
-async def check_unanimous_consensus(analyses: dict) -> bool:
-    skip, _ = await should_skip(analyses)
-    return skip

@@ -10,6 +10,7 @@ import litellm
 import numpy as np
 from pydantic import BaseModel
 
+from db import db_connect
 from embeddings import get_embedder
 from logging_utils import get_logger
 from provider_caps import caps_for
@@ -39,11 +40,7 @@ def _extract_json_block(raw: str) -> str:
 
 
 def _db_connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db_connect(path, check_same_thread=False, row_factory=True)
 
 
 def _to_vector(value) -> np.ndarray:
@@ -53,12 +50,7 @@ def _to_vector(value) -> np.ndarray:
     return vector
 
 
-def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
-    left_norm = float(np.linalg.norm(left))
-    right_norm = float(np.linalg.norm(right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return float(np.dot(left, right) / (left_norm * right_norm))
+from embeddings import cosine_similarity as _cosine_similarity  # shared helper
 
 
 class SQLiteMemory:

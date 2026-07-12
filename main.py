@@ -13,8 +13,10 @@ import pathlib
 import signal
 import zipfile
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import List, Optional
 
+import httpx
+from pydantic import BaseModel
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -30,7 +32,7 @@ from logging_utils import get_logger
 from memory_store import memory_store
 from metrics_store import metrics_store
 from ollama_manager import auto_pull_enabled, ensure_models_for_config
-from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG
+from orchestrator import CouncilOrchestrator
 from provider_caps import redact_config, supports_image_input
 from project_graph import get_project_code_graph
 from run_store import DB_PATH as RUN_DB_PATH, run_store
@@ -350,8 +352,6 @@ async def council_stream(
         },
     )
 
-from pydantic import BaseModel
-from typing import List
 
 class ChatMessage(BaseModel):
     role: str
@@ -665,18 +665,18 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
-async def health_ready():
-    import httpx
-
-    ollama_ok = False
+async def _ollama_ok() -> bool:
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             r = await client.get("http://localhost:11434/api/tags")
-            ollama_ok = r.status_code == 200
+            return r.status_code == 200
     except Exception:
-        pass
+        return False
 
+
+@app.get("/health/ready")
+async def health_ready():
+    ollama_ok = await _ollama_ok()
     return {
         "status": "ready" if ollama_ok else "degraded",
         "ollama": ollama_ok,
@@ -685,16 +685,9 @@ async def health_ready():
 
 @app.get("/status", dependencies=[Depends(require_api_key)])
 async def status():
-    import httpx
     import sqlite3 as _sqlite3
 
-    ollama_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get("http://localhost:11434/api/tags")
-            ollama_ok = r.status_code == 200
-    except Exception:
-        pass
+    ollama_ok = await _ollama_ok()
 
     db_ok = False
     try:
