@@ -5,8 +5,9 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from typing import Optional
 
+from db import db_connect
 from logging_utils import get_logger
-from provider_caps import redact_config
+from provider_caps import redact_config, scrub_secret_values
 
 
 DB_PATH = "council_runs.db"
@@ -93,10 +94,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 
 def _db_connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    return db_connect(path)
 
 
 @dataclass
@@ -213,7 +211,7 @@ class RunStore:
                     (
                         run_id,
                         time.time(),
-                        topic or "",
+                        scrub_secret_values(topic or ""),
                         roster_json,
                         fingerprint_hash,
                         int(bool(deep_debate)),
@@ -255,7 +253,7 @@ class RunStore:
                         run_id,
                         phase,
                         member_id,
-                        output or "",
+                        scrub_secret_values(output or ""),
                         tokens_in,
                         tokens_out,
                         latency_ms,

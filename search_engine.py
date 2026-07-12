@@ -1,5 +1,6 @@
 from duckduckgo_search import DDGS
 import asyncio
+import os
 import litellm
 from cloud_keys import litellm_kwargs_for_model
 from logging_utils import get_logger
@@ -19,6 +20,7 @@ async def get_search_context(reviews: dict, extraction_model: str) -> str:
             model=extraction_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=20,
+            timeout=float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
             **litellm_kwargs_for_model(extraction_model),
         )
         query = resp.choices[0].message.content.strip().replace('"', '')

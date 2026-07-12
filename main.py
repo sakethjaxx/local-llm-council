@@ -13,8 +13,10 @@ import pathlib
 import signal
 import zipfile
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import List, Optional
 
+import httpx
+from pydantic import BaseModel
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -30,11 +32,11 @@ from logging_utils import get_logger
 from memory_store import memory_store
 from metrics_store import metrics_store
 from ollama_manager import auto_pull_enabled, ensure_models_for_config
-from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG
+from orchestrator import CouncilOrchestrator
 from provider_caps import redact_config, supports_image_input
 from project_graph import get_project_code_graph
 from run_store import DB_PATH as RUN_DB_PATH, run_store
-from shutdown_state import clear_shutdown_request, is_shutdown_requested, request_shutdown, track_active_stream, wait_for_active_streams
+from shutdown_state import active_stream_count, clear_shutdown_request, is_shutdown_requested, request_shutdown, track_active_stream, wait_for_active_streams
 from skill_registry import skill_registry
 
 load_dotenv()
@@ -75,12 +77,20 @@ except (ValueError, AttributeError):
 async def lifespan(app: FastAPI):
     del app
     clear_shutdown_request()
-    asyncio.create_task(asyncio.to_thread(memory_store.rebuild_embeddings))
-    asyncio.create_task(asyncio.to_thread(memory_store.prune_memory))
-    asyncio.create_task(asyncio.to_thread(skill_registry.deduplicate_skills))
+    # Startup maintenance — fire-and-forget, but swallow exceptions so a failing
+    # background task doesn't spam "Task exception was never retrieved".
+    for coro in (
+        asyncio.to_thread(memory_store.rebuild_embeddings),
+        asyncio.to_thread(memory_store.prune_memory),
+        asyncio.to_thread(skill_registry.deduplicate_skills),
+    ):
+        t = asyncio.create_task(coro)
+        t.add_done_callback(lambda done: done.exception())
     yield
-    if is_shutdown_requested():
-        await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
+    # Drain on ANY shutdown (SIGINT/Ctrl-C, SIGTERM, or normal exit), not only
+    # SIGTERM. Signal in-flight streams to wind down, then wait briefly for them.
+    request_shutdown()
+    await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
 
 
 app = FastAPI(
@@ -128,6 +138,27 @@ def _request_cloud_keys(request: Request | None) -> dict[str, str]:
 
 def _shutdown_event_payload() -> dict:
     return {"type": "shutdown", "message": "Server shutdown requested. Active stream is closing."}
+
+
+# Max concurrent SSE council runs — bounds resource/cost exhaustion on an exposed
+# instance. A constant, not a knob (edit if your hardware runs more in parallel).
+MAX_CONCURRENT_STREAMS = 8
+
+
+def _reject_if_overloaded() -> None:
+    if active_stream_count() >= MAX_CONCURRENT_STREAMS:
+        raise HTTPException(status_code=429, detail="Server busy: too many concurrent council runs")
+
+
+def _confine_to_project_root(candidate: str) -> str:
+    """Resolve a caller-supplied path and confine it to COUNCIL_PROJECT_ROOT
+    (default: cwd). Blocks arbitrary-filesystem reads via review-project /
+    code-graph on an exposed instance."""
+    root = os.path.abspath(os.getenv("COUNCIL_PROJECT_ROOT", os.getcwd()))
+    resolved = os.path.abspath(candidate)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise HTTPException(status_code=403, detail="Path is outside the allowed project root (set COUNCIL_PROJECT_ROOT)")
+    return resolved
 
 
 def _metrics_run_for_export(run_id: str) -> dict:
@@ -205,10 +236,17 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/demo-samples", StaticFiles(directory="demo_samples"), name="demo-samples")
 
 
+_INDEX_HTML_CACHE: Optional[str] = None
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    with open("static/index.html") as f:
-        return f.read()
+    global _INDEX_HTML_CACHE
+    if _INDEX_HTML_CACHE is None:
+        _INDEX_HTML_CACHE = await asyncio.to_thread(
+            lambda: open("static/index.html").read()
+        )
+    return _INDEX_HTML_CACHE
 
 
 @app.post("/council/stream")
@@ -224,6 +262,7 @@ async def council_stream(
     """
     SSE endpoint — streams council events as they happen.
     """
+    _reject_if_overloaded()
     max_files = _int_env("COUNCIL_MAX_FILES", 10)
     max_upload_mb = _int_env("COUNCIL_MAX_UPLOAD_MB", 20)
     max_upload_bytes = max_upload_mb * 1024 * 1024
@@ -249,11 +288,13 @@ async def council_stream(
         parsed_attachments.append(parsed)
 
     config_dict = None
+    config_parse_error = None
     if council_config:
         try:
             config_dict = json.loads(council_config)
-        except:
-            pass
+        except (json.JSONDecodeError, ValueError) as exc:
+            config_parse_error = str(exc)
+            logger.warning("council_config_parse_failed", extra={"error": config_parse_error})
 
     async def event_generator():
         with track_active_stream():
@@ -273,8 +314,10 @@ async def council_stream(
                 if is_shutdown_requested():
                     yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
                     return
-                model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                 yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                if config_parse_error:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'Invalid council_config JSON — using default roster. (' + config_parse_error + ')'})}\n\n"
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
                     metrics_store.finish_run(
@@ -292,12 +335,12 @@ async def council_stream(
                     if new_roster:
                         new_roster["chairman"] = cfg.get("chairman")
                         cfg = new_roster
-                        model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                        model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                         yield f"data: {json.dumps({'type': 'swarm_routed', 'config': redact_config(cfg)})}\n\n"
                         yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                         if not model_status["ready"]:
                             cfg = copy.deepcopy(config_dict or get_default_council_config())
-                            model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                            model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                             yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm selected models that are not installed. Falling back to the stable demo roster.'})}\n\n"
                             yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                     else:
@@ -331,8 +374,6 @@ async def council_stream(
         },
     )
 
-from pydantic import BaseModel
-from typing import List
 
 class ChatMessage(BaseModel):
     role: str
@@ -360,6 +401,7 @@ async def council_chat(req: ChatRequest, request: Request):
     """
     Interactive Debate Mode — stream a reply from a specific member
     """
+    _reject_if_overloaded()
     orchestrator = CouncilOrchestrator()
     run_id = metrics_store.start_run("chat", {"member_id": req.member_id})
     
@@ -485,9 +527,9 @@ class ReviewProjectRequest(BaseModel):
 
 @app.post("/council/review-project")
 async def review_project(req: ReviewProjectRequest, request: Request):
-    root = os.path.abspath(req.path)
+    _reject_if_overloaded()
+    root = _confine_to_project_root(req.path)
     if not os.path.isdir(root):
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
 
     graph_data = await asyncio.to_thread(get_project_code_graph, root)
@@ -516,7 +558,7 @@ async def review_project(req: ReviewProjectRequest, request: Request):
                 yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
                 yield f"data: {json.dumps({'type': 'project_info', 'path': root, 'files_selected': top_files, 'total_files': graph_data['stats']['files']})}\n\n"
 
-                model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Missing models: ' + ', '.join(model_status['missing'])})}\n\n"
@@ -550,7 +592,7 @@ async def review_project(req: ReviewProjectRequest, request: Request):
 
 @app.get("/project/code-graph")
 async def project_code_graph(path: str = "."):
-    return get_project_code_graph(path)
+    return await asyncio.to_thread(get_project_code_graph, _confine_to_project_root(path))
 
 
 @app.get("/demo/catalog")
@@ -565,7 +607,8 @@ async def config_presets():
 
 @app.get("/runs")
 async def list_persisted_runs(limit: int = 50, fingerprint_hash: Optional[str] = None):
-    return {"runs": run_store.list_runs(limit=limit, fingerprint_hash=fingerprint_hash)}
+    runs = await asyncio.to_thread(run_store.list_runs, limit, fingerprint_hash)
+    return {"runs": runs}
 
 
 @app.get("/skills")
@@ -576,13 +619,13 @@ async def list_skills(limit: int = 50, domain: Optional[str] = None):
 
 @app.get("/runs/{run_id}")
 async def get_persisted_run(run_id: str):
-    return run_store.get_run(run_id)
+    return await asyncio.to_thread(run_store.get_run, run_id)
 
 
 @app.get("/runs/{run_id}/export")
 async def export_persisted_run(run_id: str, format: str = "md"):
     export_format = (format or "md").strip().lower()
-    run = redact_config(run_store.get_run(run_id))
+    run = redact_config(await asyncio.to_thread(run_store.get_run, run_id))
     metrics = _metrics_run_for_export(run_id)
 
     if not run:
@@ -630,13 +673,13 @@ async def export_persisted_run(run_id: str, format: str = "md"):
 
 @app.delete("/runs/{run_id}")
 async def delete_persisted_run(run_id: str):
-    deleted = run_store.delete_run(run_id)
+    deleted = await asyncio.to_thread(run_store.delete_run, run_id)
     return {"run_id": run_id, "deleted": deleted}
 
 
 @app.post("/runs/{run_id}/feedback")
 async def record_run_feedback(run_id: str, req: FeedbackRequest):
-    run_store.record_feedback(run_id, req.action_index, req.rating, req.note)
+    await asyncio.to_thread(run_store.record_feedback, run_id, req.action_index, req.rating, req.note)
     return {"run_id": run_id, "action_index": req.action_index, "rating": req.rating, "recorded": True}
 
 
@@ -645,18 +688,18 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
-async def health_ready():
-    import httpx
-
-    ollama_ok = False
+async def _ollama_ok() -> bool:
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             r = await client.get("http://localhost:11434/api/tags")
-            ollama_ok = r.status_code == 200
+            return r.status_code == 200
     except Exception:
-        pass
+        return False
 
+
+@app.get("/health/ready")
+async def health_ready():
+    ollama_ok = await _ollama_ok()
     return {
         "status": "ready" if ollama_ok else "degraded",
         "ollama": ollama_ok,
@@ -665,16 +708,9 @@ async def health_ready():
 
 @app.get("/status", dependencies=[Depends(require_api_key)])
 async def status():
-    import httpx
     import sqlite3 as _sqlite3
 
-    ollama_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get("http://localhost:11434/api/tags")
-            ollama_ok = r.status_code == 200
-    except Exception:
-        pass
+    ollama_ok = await _ollama_ok()
 
     db_ok = False
     try:
@@ -713,7 +749,7 @@ async def get_metrics_summary():
 
 @app.get("/metrics/quality")
 async def get_metrics_quality(limit: int = 100):
-    return run_store.list_quality_metrics(limit=max(1, min(limit, 500)))
+    return await asyncio.to_thread(run_store.list_quality_metrics, max(1, min(limit, 500)))
 
 
 if __name__ == "__main__":
@@ -729,4 +765,7 @@ if __name__ == "__main__":
             "Set COUNCIL_API_KEY or use COUNCIL_HOST=127.0.0.1"
         )
 
-    uvicorn.run("main:app", host=host, port=port, reload=True)
+    # Auto-reload watches the filesystem and drops active SSE streams on any
+    # file change (e.g. the sandbox temp file) — off by default, opt-in for dev.
+    reload = os.getenv("COUNCIL_RELOAD", "false").strip().lower() == "true"
+    uvicorn.run("main:app", host=host, port=port, reload=reload)

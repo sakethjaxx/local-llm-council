@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import re
 import sqlite3
 import time
@@ -11,6 +10,7 @@ import litellm
 import numpy as np
 
 from cloud_keys import litellm_kwargs_for_model
+from db import db_connect
 from embeddings import get_embedder
 from logging_utils import get_logger
 from run_store import DB_PATH, SCHEMA
@@ -20,11 +20,7 @@ logger = get_logger(__name__)
 
 
 def _db_connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db_connect(path, check_same_thread=False, row_factory=True)
 
 
 def _to_vector(value) -> np.ndarray:
@@ -34,12 +30,7 @@ def _to_vector(value) -> np.ndarray:
     return vector
 
 
-def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
-    left_norm = float(np.linalg.norm(left))
-    right_norm = float(np.linalg.norm(right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return float(np.dot(left, right) / (left_norm * right_norm))
+from embeddings import cosine_similarity as _cosine_similarity  # shared helper
 
 
 def _extract_json_block(raw: str) -> str:

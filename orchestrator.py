@@ -39,8 +39,40 @@ from typing import List
 logger = get_logger(__name__)
 _TOKEN_ENCODINGS: dict[str, object] = {}
 
+# Per-call wall-clock ceiling for every LLM request. Without this a hung
+# provider connection stalls a member/phase indefinitely (only interruptible if
+# chunks keep arriving). Configurable via env for slow local hardware.
+LLM_TIMEOUT_S = float(os.getenv("COUNCIL_LLM_TIMEOUT", "180"))
+
+# Upper bound on how many council members may call an LLM concurrently. Roster
+# size is client/dynamic-swarm controlled, so this is the backpressure valve
+# that stops an unbounded stampede against Ollama/cloud providers.
+MAX_PARALLEL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_PARALLEL_MEMBERS", "4")))
+
+# Hard ceiling on roster size regardless of what a client config or the dynamic
+# swarm produces — caps total task/queue creation per run.
+MAX_COUNCIL_MEMBERS = 8
+
+# Max execute_python tool-call recursion depth per member (S2 hardening).
+MAX_TOOL_DEPTH = 3
+
+
+# tiktoken/cl100k_base is only the tokenizer for OpenAI models. For everything
+# else (the primary local Ollama fleet — Qwen/Llama/Mistral/Gemma/DeepSeek — plus
+# Anthropic/Gemini) it is a proxy that typically UNDER-counts, which would let the
+# budget math overflow the real context window. We inflate non-OpenAI estimates by
+# a safety margin so truncation stays conservative.
+_OPENAI_MODEL_PREFIXES = ("gpt-", "gpt3", "gpt4", "o1", "o3", "o4", "chatgpt", "text-embedding", "davinci", "curie")
+TOKEN_SAFETY_MARGIN = 1.15
+
+
+def _is_openai_model(model: str) -> bool:
+    base = (model or "").replace("ollama/", "").split("/")[-1].lower()
+    return any(base.startswith(prefix) for prefix in _OPENAI_MODEL_PREFIXES)
+
 
 def _count_tokens(model: str, text: str) -> int:
+    text = text or ""
     try:
         encoding_key = model or "default"
         if encoding_key not in _TOKEN_ENCODINGS:
@@ -48,12 +80,15 @@ def _count_tokens(model: str, text: str) -> int:
                 _TOKEN_ENCODINGS[encoding_key] = tiktoken.encoding_for_model(model.replace("ollama/", ""))
             except KeyError:
                 _TOKEN_ENCODINGS[encoding_key] = tiktoken.get_encoding("cl100k_base")
-        return len(_TOKEN_ENCODINGS[encoding_key].encode(text or ""))
+        count = len(_TOKEN_ENCODINGS[encoding_key].encode(text))
     except Exception:
         try:
-            return litellm.token_counter(model=model, text=text)
+            count = litellm.token_counter(model=model, text=text)
         except Exception:
-            return len(text or "") // 4
+            count = len(text) // 4
+    if not _is_openai_model(model):
+        count = int(count * TOKEN_SAFETY_MARGIN)
+    return count
 
 
 def _truncate_to_token_budget(model: str, text: str, max_tokens: int) -> str:
@@ -63,18 +98,20 @@ def _truncate_to_token_budget(model: str, text: str, max_tokens: int) -> str:
     if _count_tokens(model, text) <= max_tokens:
         return text
 
-    marker_tokens = _count_tokens(model, marker)
-    target_tokens = max_tokens - marker_tokens
-    if target_tokens <= 0:
-        return marker if marker_tokens <= max_tokens else ""
+    # If even the bare marker doesn't fit, return nothing.
+    if _count_tokens(model, marker) > max_tokens:
+        return ""
 
+    # Binary-search on the MARKER-INCLUDED candidate so the returned string is
+    # guaranteed <= max_tokens. (The token safety margin makes _count_tokens
+    # non-additive, so measuring text and marker separately can overshoot.)
     low = 0
     high = len(text)
     best = ""
     while low <= high:
         mid = (low + high) // 2
         candidate = text[:mid]
-        if _count_tokens(model, candidate) <= target_tokens:
+        if _count_tokens(model, candidate + marker) <= max_tokens:
             best = candidate
             low = mid + 1
         else:
@@ -82,9 +119,25 @@ def _truncate_to_token_budget(model: str, text: str, max_tokens: int) -> str:
     return best + marker
 
 
+def _render_fair_sections(model: str, items: list[tuple[str, str]], budget: int, head_fmt: str) -> str:
+    """Render labelled sections so each item gets an EQUAL share of the token
+    budget and is individually truncated. Prevents the tail-drop bias where the
+    last members are always the ones cut under context pressure."""
+    if not items or budget <= 0:
+        return ""
+    per_item = max(1, budget // len(items))
+    out = ""
+    for label, text in items:
+        head = head_fmt.format(label=label)
+        body_budget = max(1, per_item - _count_tokens(model, head) - 2)
+        out += head + _truncate_to_token_budget(model, text, body_budget) + "\n\n"
+    return out
+
+
 class ChairmanDecision(BaseModel):
     verdict: str
     risk_score: int
+    confidence: int = 5
     action_items: List[str]
     consensus: List[str] = []
     disputes: List[str] = []
@@ -112,6 +165,7 @@ def parse_chairman_response(raw: str) -> dict:
         return {
             "verdict": result.get("verdict", "parse_failed"),
             "risk_score": result.get("risk_score", -1),
+            "confidence": result.get("confidence", -1),
             "action_items": result.get("action_items", []),
             "consensus": consensus,
             "disputes": result.get("disputes", []),
@@ -126,6 +180,18 @@ def parse_chairman_response(raw: str) -> dict:
     try:
         stripped = re.sub(r"^```(?:json)?\n?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
         return normalize(json.loads(stripped), "fenced_json")
+    except Exception:
+        pass
+
+    # Tolerant repair: grab the outermost {...} (handles leading/trailing prose
+    # and inline fences) and drop trailing commas before the closing brace/bracket.
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            candidate = raw[start:end + 1]
+            candidate = re.sub(r",(\s*[}\]])", r"\1", candidate)
+            return normalize(json.loads(candidate), "json_repaired")
     except Exception:
         pass
 
@@ -152,6 +218,10 @@ def parse_chairman_response(raw: str) -> dict:
 
 
 def _specificity_score(chairman_result: dict, raw_text: str) -> float:
+    # Distinguish "unparseable output" (-1.0 sentinel) from "parsed but vague"
+    # (0.0) so quality metrics don't conflate a broken response with a weak one.
+    if chairman_result.get("_parse_tier") == "parse_failed":
+        return -1.0
     action_items = chairman_result.get("action_items") or []
     if not action_items:
         return 0.0
@@ -174,6 +244,25 @@ def _specificity_score(chairman_result: dict, raw_text: str) -> float:
     return round(min(1.0, (scored_items / len(action_items)) + structure_bonus), 3)
 
 
+_RETRYABLE_ERROR_MARKERS = (
+    "timeout", "timed out", "rate limit", "service unavailable",
+    "503", "502", "429", "connection", "reset by peer",
+)
+_PERMANENT_ERROR_MARKERS = (
+    "model not found", "not found", "invalid api key", "unauthorized",
+    "401", "403", "no such model", "pull model",
+)
+
+
+def _classify_llm_error(error_msg: str) -> tuple[bool, bool]:
+    """Return (is_retryable, is_permanent) for an LLM-call exception message."""
+    low = error_msg.lower()
+    return (
+        any(marker in low for marker in _RETRYABLE_ERROR_MARKERS),
+        any(marker in low for marker in _PERMANENT_ERROR_MARKERS),
+    )
+
+
 # Make litellm not spam the console
 litellm.suppress_debug_info = True
 
@@ -191,6 +280,14 @@ DEFAULT_MEMBER_CONFIG = get_default_council_config()
 class CouncilOrchestrator:
     def __init__(self, **kwargs):
         self._token_budget = token_budget_for(kwargs.get("token_budget_profile"))
+        self._member_semaphore = None
+
+    def _member_slot(self):
+        """Concurrency gate for member LLM calls. Falls back to a no-op context
+        if a caller invokes a worker outside of run() (e.g. in unit tests)."""
+        if self._member_semaphore is None:
+            return contextlib.nullcontext()
+        return self._member_semaphore
 
     def _python_tool_enabled_for_model(self, model: str) -> bool:
         if os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() != "true":
@@ -232,6 +329,7 @@ class CouncilOrchestrator:
         response_format=None,
         run_id: Optional[str] = None,
         emit_done: bool = True,
+        tool_depth: int = 0,
     ) -> str:
         logger.info("llm_call_started", extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label")})
 
@@ -242,9 +340,14 @@ class CouncilOrchestrator:
         final_attempt = 1
         final_latency_ms = None
         success = False
+        errored = False
+        last_error = None
 
+        # Cap tool-call recursion: each iteration spawns a fresh sandbox container,
+        # and an injected model could otherwise loop execute_python indefinitely
+        # (DoS + cloud-cost amplification). Stop offering the tool past the limit.
         tools = None
-        if phase == 1 and self._python_tool_enabled_for_model(cfg.get("model", "")):
+        if phase == 1 and tool_depth < MAX_TOOL_DEPTH and self._python_tool_enabled_for_model(cfg.get("model", "")):
             tools = [
                 {
                     "type": "function",
@@ -292,6 +395,7 @@ class CouncilOrchestrator:
                     stream=True,
                     tools=tools,
                     response_format=response_format,
+                    timeout=LLM_TIMEOUT_S,
                     **litellm_kwargs_for_model(cfg["model"]),
                 )
 
@@ -382,6 +486,7 @@ class CouncilOrchestrator:
                                 response_format=response_format,
                                 run_id=None,
                                 emit_done=False,
+                                tool_depth=tool_depth + 1,
                             )
                             full_text += sys_msg + additional_text
                             followup_completed = True
@@ -395,15 +500,7 @@ class CouncilOrchestrator:
                     "llm_call_attempt_failed",
                     extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label"), "attempt": attempt + 1, "error": error_msg},
                 )
-                error_lower = error_msg.lower()
-                is_retryable = any(marker in error_lower for marker in [
-                    "timeout", "timed out", "rate limit", "service unavailable",
-                    "503", "502", "429", "connection", "reset by peer"
-                ])
-                is_permanent = any(marker in error_lower for marker in [
-                    "model not found", "not found", "invalid api key", "unauthorized",
-                    "401", "403", "no such model", "pull model"
-                ])
+                is_retryable, is_permanent = _classify_llm_error(error_msg)
                 metrics_store.record_llm_call(
                     run_id=run_id,
                     member_id=member_id,
@@ -422,6 +519,9 @@ class CouncilOrchestrator:
                     )
                     final_err = f"\n[Error connecting to {cfg['label']}: {error_msg}]"
                     full_text += final_err
+                    errored = True
+                    last_error = error_msg
+                    finish_reason = "error"
                     await queue.put({"type": "member_token", "member": member_id, "chunk": final_err})
                     break
                 if is_retryable and attempt < max_retries - 1:
@@ -431,8 +531,19 @@ class CouncilOrchestrator:
 
         if success:
             await record_success_once()
+        elif errored and run_id:
+            # Persist the errored phase output so the DB matches what was streamed
+            # to the client, instead of silently dropping it.
+            await asyncio.to_thread(
+                run_store.record_phase_output,
+                run_id, phase, member_id, full_text,
+                None, None, final_latency_ms, "error", final_attempt,
+            )
         if emit_done:
-            await queue.put({"type": "member_done", "member": member_id, "full_text": full_text})
+            done_event = {"type": "member_done", "member": member_id, "full_text": full_text, "errored": errored}
+            if errored:
+                done_event["error"] = last_error
+            await queue.put(done_event)
         return full_text
 
     async def _member_analyze(
@@ -463,15 +574,16 @@ class CouncilOrchestrator:
             content.append({"type": "text", "text": "No context provided — analyze the request based on your persona."})
 
         messages = self._build_messages(cfg.get("model", ""), system_prompt, content)
-        await self._stream_llm_to_queue(
-            member_id,
-            cfg,
-            1,
-            messages,
-            queue,
-            self._token_budget["phase1"],
-            run_id=run_id,
-        )
+        async with self._member_slot():
+            await self._stream_llm_to_queue(
+                member_id,
+                cfg,
+                1,
+                messages,
+                queue,
+                self._token_budget["phase1"],
+                run_id=run_id,
+            )
 
     async def _member_review(
         self,
@@ -484,36 +596,31 @@ class CouncilOrchestrator:
     ):
         system_prompt = PHASE2_PROMPT.format(persona=cfg.get("persona", ""))
 
-        prompt_parts = ["You are reviewing analyses from your peers:\n"]
         model_id = cfg.get("model", "")
         context_window = caps_for(model_id)[0].context_window or 4096
-        max_total_input_tokens = context_window - self._token_budget["phase2"] - 800
-        max_total_input_tokens = max(125, max_total_input_tokens)
-        peers = [(peer_id, analysis) for peer_id, analysis in analyses.items() if peer_id != member_id]
-
-        for peer_id, analysis in peers:
-            peer_label = members_config[peer_id].get("label", peer_id)
-            prompt_parts.append(f"--- {peer_label} ---\n{analysis}\n")
-        
-        prompt = "\n".join(prompt_parts)
-        original_tokens = _count_tokens(model_id, prompt)
-        if original_tokens > max_total_input_tokens:
-            original_len = len(prompt)
-            prompt = _truncate_to_token_budget(model_id, prompt, max_total_input_tokens)
-            logger.info(
-                "phase2_input_truncated",
-                extra={"model": cfg.get("model", ""), "original_chars": original_len, "truncated_chars": len(prompt)},
-            )
+        header = "You are reviewing analyses from your peers:\n\n"
+        max_total_input_tokens = max(125, context_window - self._token_budget["phase2"] - 800)
+        peers_budget = max(1, max_total_input_tokens - _count_tokens(model_id, header))
+        peer_items = [
+            (members_config[peer_id].get("label", peer_id), analysis)
+            for peer_id, analysis in analyses.items()
+            if peer_id != member_id
+        ]
+        # Fair-share the budget across peers so every peer's analysis survives
+        # under context pressure, rather than truncating the concatenated blob
+        # (which dropped later peers wholesale).
+        prompt = header + _render_fair_sections(model_id, peer_items, peers_budget, "--- {label} ---\n")
         messages = self._build_messages(cfg.get("model", ""), system_prompt, prompt)
-        await self._stream_llm_to_queue(
-            member_id,
-            cfg,
-            2,
-            messages,
-            queue,
-            self._token_budget["phase2"],
-            run_id=run_id,
-        )
+        async with self._member_slot():
+            await self._stream_llm_to_queue(
+                member_id,
+                cfg,
+                2,
+                messages,
+                queue,
+                self._token_budget["phase2"],
+                run_id=run_id,
+            )
 
     async def _chairman_decide(
         self,
@@ -523,74 +630,69 @@ class CouncilOrchestrator:
         reviews: dict[str, str],
         queue: asyncio.Queue,
         run_id: Optional[str] = None,
+        phase2_note: Optional[str] = None,
     ):
-        # 1. Chairman Web Search (Optional)
-        search_results = await get_search_context(reviews, chairman_cfg["model"])
-
-        council_brief = ""
-        if search_results:
-            council_brief += search_results + "\n\n"
-            
-        for member, analysis in analyses.items():
-            cfg = members_config.get(member, {})
-            council_brief += f"=== {cfg.get('label', member)} ANALYSIS ===\n{analysis}\n\n"
-        council_brief += "\n--- PEER REVIEWS ---\n\n"
-        for reviewer, review in reviews.items():
-            cfg = members_config.get(reviewer, {})
-            council_brief += f"=== {cfg.get('label', reviewer)} REVIEW ===\n{review}\n\n"
-
+        phase2_skipped = phase2_note is not None
         chairman_model = chairman_cfg.get("model", "")
+
+        # 1. Chairman Web Search (Optional). Detect disputes over REAL content —
+        # when Phase 2 was skipped the "reviews" are stubs, so use the analyses.
+        search_results = await get_search_context(
+            analyses if phase2_skipped else reviews, chairman_cfg["model"]
+        )
+
         context_window = caps_for(chairman_model)[0].context_window or 4096
-        max_input_tokens = context_window - self._token_budget["phase3"] - 500
-        max_input_tokens = max(1, max_input_tokens)
-        original_len = len(council_brief)
-        original_tokens = _count_tokens(chairman_model, council_brief)
-        if original_tokens > max_input_tokens:
-            rebuilt_parts = []
-            used_tokens = 0
-            truncated = False
+        max_input_tokens = max(1, context_window - self._token_budget["phase3"] - 500)
 
-            def add_section(section: str) -> bool:
-                nonlocal used_tokens, truncated
-                section_tokens = _count_tokens(chairman_model, section)
-                if used_tokens + section_tokens > max_input_tokens:
-                    truncated = True
-                    return False
-                rebuilt_parts.append(section)
-                used_tokens += section_tokens
-                return True
+        header = ""
+        if search_results:
+            header += search_results + "\n\n"
 
-            if search_results:
-                add_section(search_results + "\n\n")
+        # Peer-review block. On the skip path, tell the chairman honestly that
+        # Phase 2 did not run (and why) instead of feeding it fabricated
+        # "unanimous agreement" stubs as if they were real cross-review.
+        if phase2_skipped:
+            peer_block = (
+                "\n--- PEER REVIEWS ---\n"
+                f"[Phase 2 cross-review was SKIPPED: {phase2_note}. No peer critiques "
+                "were produced — derive consensus and disputes yourself from the "
+                "Phase 1 analyses below.]\n\n"
+            )
+        else:
+            review_items = [
+                (members_config.get(r, {}).get("label", r), text) for r, text in reviews.items()
+            ]
 
-            if not truncated:
-                for member, analysis in analyses.items():
-                    cfg = members_config.get(member, {})
-                    section = f"=== {cfg.get('label', member)} ANALYSIS ===\n{analysis}\n\n"
-                    if not add_section(section):
-                        break
+        analysis_items = [
+            (members_config.get(m, {}).get("label", m), text) for m, text in analyses.items()
+        ]
 
-            if not truncated:
-                review_header = "\n--- PEER REVIEWS ---\n\n"
-                for reviewer, review in reviews.items():
-                    cfg = members_config.get(reviewer, {})
-                    prefix = review_header if reviewer == next(iter(reviews), None) else ""
-                    section = f"{prefix}=== {cfg.get('label', reviewer)} REVIEW ===\n{review}\n\n"
-                    if not add_section(section):
-                        break
+        budget_after_header = max(1, max_input_tokens - _count_tokens(chairman_model, header))
+        if phase2_skipped:
+            analyses_budget = max(1, budget_after_header - _count_tokens(chairman_model, peer_block))
+            analyses_block = _render_fair_sections(
+                chairman_model, analysis_items, analyses_budget, "=== {label} ANALYSIS ===\n"
+            )
+        else:
+            # Split remaining budget 60/40 between analyses and peer reviews, each
+            # fair-shared internally so every member is represented.
+            analyses_budget = max(1, int(budget_after_header * 0.6))
+            reviews_budget = max(1, budget_after_header - analyses_budget)
+            analyses_block = _render_fair_sections(
+                chairman_model, analysis_items, analyses_budget, "=== {label} ANALYSIS ===\n"
+            )
+            peer_block = "\n--- PEER REVIEWS ---\n\n" + _render_fair_sections(
+                chairman_model, review_items, reviews_budget, "=== {label} REVIEW ===\n"
+            )
 
-            council_brief = "".join(rebuilt_parts)
-            marker = "\n[truncated]"
-            marker_tokens = _count_tokens(chairman_model, marker)
-            if truncated and used_tokens + marker_tokens <= max_input_tokens:
-                council_brief += marker
+        council_brief = header + analyses_block + peer_block
 
-            if _count_tokens(chairman_model, council_brief) > max_input_tokens:
-                council_brief = _truncate_to_token_budget(chairman_model, council_brief, max_input_tokens)
-
+        # Final safety net in case the fair-share estimate still overshoots.
+        if _count_tokens(chairman_model, council_brief) > max_input_tokens:
+            council_brief = _truncate_to_token_budget(chairman_model, council_brief, max_input_tokens)
             logger.info(
                 "phase3_input_truncated",
-                extra={"model": chairman_cfg.get("model"), "original_chars": original_len, "truncated_chars": len(council_brief)},
+                extra={"model": chairman_model, "truncated_chars": len(council_brief)},
             )
 
         messages = self._build_messages(
@@ -621,9 +723,21 @@ class CouncilOrchestrator:
         token_budget_profile: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         self._token_budget = token_budget_for(token_budget_profile)
+        self._member_semaphore = asyncio.Semaphore(MAX_PARALLEL_MEMBERS)
         config = custom_config if custom_config else DEFAULT_MEMBER_CONFIG
         council_members = [k for k in config.keys() if k != "chairman"]
+        roster_capped = False
+        if len(council_members) > MAX_COUNCIL_MEMBERS:
+            logger.warning(
+                "roster_capped",
+                extra={"requested": len(council_members), "cap": MAX_COUNCIL_MEMBERS},
+            )
+            council_members = council_members[:MAX_COUNCIL_MEMBERS]
+            roster_capped = True
         chairman_cfg = config.get("chairman", DEFAULT_MEMBER_CONFIG["chairman"])
+        errored_members: set[str] = set()
+        spawned_tasks: list[asyncio.Task] = []
+        run_finalized = False
         run_id = run_id or metrics_store.start_run(
             "council",
             {
@@ -655,15 +769,18 @@ class CouncilOrchestrator:
             topic_context = await chunk_and_summarize(scraped_topic, chairman_cfg["model"])
             full_topic = f"{past_context}{skills_block}{topic_context}"
 
+            if roster_capped:
+                yield {"type": "warning", "message": f"Roster exceeded the {MAX_COUNCIL_MEMBERS}-member cap; using the first {MAX_COUNCIL_MEMBERS} members."}
+
             yield {"type": "phase_start", "phase": 1, "label": "Independent Analysis"}
             for member in council_members:
                 yield {"type": "member_thinking", "member": member, "meta": config[member]}
 
             queue = asyncio.Queue()
             for member in council_members:
-                asyncio.create_task(
+                spawned_tasks.append(asyncio.create_task(
                     self._member_analyze(member, config[member], full_topic, attachments, queue, run_id=run_id)
-                )
+                ))
 
             analyses = {}
             completed = 0
@@ -672,13 +789,17 @@ class CouncilOrchestrator:
                 if event["type"] == "member_done":
                     completed += 1
                     analyses[event["member"]] = event["full_text"]
+                    if event.get("errored"):
+                        errored_members.add(event["member"])
                 else:
                     yield event
 
             reviews = {}
             phase1_divergence = None
+            phase2_note = None
 
             if not deep_debate:
+                phase2_note = "Fast mode was enabled (cross-review bypassed for latency)"
                 yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (Bypassed - Fast Mode)"}
                 for member in council_members:
                     reviews[member] = "SKIPPED - Fast Code Review mode enabled. Bypassing debate for latency."
@@ -691,6 +812,7 @@ class CouncilOrchestrator:
                 await asyncio.to_thread(run_store.update_smart_phase_score, run_id, smart_score)
 
                 if is_unanimous:
+                    phase2_note = f"high inter-analysis agreement (min pairwise similarity {round(smart_score, 3)} > threshold {smart_phase.SKIP_THRESHOLD})"
                     yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (SKIPPED - Unanimous Consensus!)"}
                     for member in council_members:
                         reviews[member] = "SKIPPED - The council was in unanimous agreement during Phase 1. No factual disputes detected."
@@ -704,9 +826,9 @@ class CouncilOrchestrator:
 
                     queue = asyncio.Queue()
                     for member in council_members:
-                        asyncio.create_task(
+                        spawned_tasks.append(asyncio.create_task(
                             self._member_review(member, config[member], config, analyses, queue, run_id=run_id)
-                        )
+                        ))
 
                     completed = 0
                     while completed < len(council_members):
@@ -714,6 +836,8 @@ class CouncilOrchestrator:
                         if event["type"] == "member_done":
                             completed += 1
                             reviews[event["member"]] = event["full_text"]
+                            if event.get("errored"):
+                                errored_members.add(event["member"])
                         else:
                             yield event
 
@@ -721,9 +845,9 @@ class CouncilOrchestrator:
             yield {"type": "member_thinking", "member": "chairman", "phase": 3, "meta": chairman_cfg}
 
             queue = asyncio.Queue()
-            asyncio.create_task(
-                self._chairman_decide(chairman_cfg, config, analyses, reviews, queue, run_id=run_id)
-            )
+            spawned_tasks.append(asyncio.create_task(
+                self._chairman_decide(chairman_cfg, config, analyses, reviews, queue, run_id=run_id, phase2_note=phase2_note)
+            ))
 
             completed = 0
             chairman_decision_text = ""
@@ -732,6 +856,8 @@ class CouncilOrchestrator:
                 if event["type"] == "member_done":
                     completed += 1
                     chairman_decision_text = event["full_text"]
+                    if event.get("errored"):
+                        errored_members.add("chairman")
                 else:
                     yield event
 
@@ -766,18 +892,38 @@ class CouncilOrchestrator:
             )
             with contextlib.suppress(Exception):
                 task.add_done_callback(lambda t: t.exception())
-            metrics_store.finish_run(run_id, status="completed")
-            await asyncio.to_thread(run_store.finish_run, run_id, "completed")
+            final_status = "partial" if errored_members else "completed"
+            final_error = (
+                "Members failed: " + ", ".join(sorted(errored_members)) if errored_members else None
+            )
+            metrics_store.finish_run(run_id, status=final_status, error=final_error)
+            await asyncio.to_thread(run_store.finish_run, run_id, final_status, final_error)
+            run_finalized = True
             task = asyncio.create_task(
                 skill_registry.extract_skills(run_id, combined_topic, chairman_cfg["model"])
             )
             with contextlib.suppress(Exception):
                 task.add_done_callback(lambda t: t.exception())
-            yield {"type": "done"}
+            yield {"type": "done", "status": final_status, "errored_members": sorted(errored_members)}
         except Exception as exc:
             metrics_store.finish_run(run_id, status="failed", error=str(exc))
             await asyncio.to_thread(run_store.finish_run, run_id, "failed", str(exc))
+            run_finalized = True
             raise
+        finally:
+            # Cancel any still-running member/chairman tasks (e.g. on client
+            # disconnect, which throws GeneratorExit here) so they stop hitting
+            # providers and writing to a queue no one drains.
+            for t in spawned_tasks:
+                if not t.done():
+                    t.cancel()
+            # If the generator was closed before normal completion, the run is
+            # still marked "running" in both stores — finalize it as cancelled.
+            if not run_finalized:
+                with contextlib.suppress(Exception):
+                    metrics_store.finish_run(run_id, status="cancelled", error="Run interrupted before completion")
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(run_store.finish_run, run_id, "cancelled", "Run interrupted before completion")
 
     async def chat_with_member(
         self,
@@ -817,6 +963,7 @@ class CouncilOrchestrator:
                     messages=formatted_messages,
                     max_tokens=self._token_budget["chat"],
                     stream=True,
+                    timeout=LLM_TIMEOUT_S,
                     **litellm_kwargs_for_model(cfg["model"]),
                 )
                 async for chunk in resp:
@@ -851,15 +998,7 @@ class CouncilOrchestrator:
                     "chat_call_attempt_failed",
                     extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id, "attempt": attempt + 1, "error": error_msg},
                 )
-                error_lower = error_msg.lower()
-                is_retryable = any(marker in error_lower for marker in [
-                    "timeout", "timed out", "rate limit", "service unavailable",
-                    "503", "502", "429", "connection", "reset by peer"
-                ])
-                is_permanent = any(marker in error_lower for marker in [
-                    "model not found", "not found", "invalid api key", "unauthorized",
-                    "401", "403", "no such model", "pull model"
-                ])
+                is_retryable, is_permanent = _classify_llm_error(error_msg)
                 metrics_store.record_llm_call(
                     run_id=run_id,
                     member_id=member_id,

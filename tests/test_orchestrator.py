@@ -18,6 +18,7 @@ if "litellm" not in sys.modules:
     litellm_stub.acompletion = _unused_acompletion
     sys.modules["litellm"] = litellm_stub
 
+import orchestrator as orchestrator_module
 from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG, _count_tokens, _specificity_score, parse_chairman_response
 from run_store import RunStore
 
@@ -79,6 +80,32 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["consensus"], [])
         self.assertEqual(result["disputes"], [])
         self.assertEqual(result["_parse_tier"], "parse_failed")
+
+    def test_parse_chairman_response_json_repaired(self):
+        result = parse_chairman_response(
+            'Here is the JSON: {"verdict":"ship","risk_score":3,"action_items":["do x",],'
+            '"consensus":["ok"],"disputes":[]} Hope this helps!'
+        )
+
+        self.assertEqual(result["verdict"], "ship")
+        self.assertEqual(result["risk_score"], 3)
+        self.assertEqual(result["action_items"], ["do x"])
+        self.assertEqual(result["_parse_tier"], "json_repaired")
+
+    def test_parse_chairman_response_includes_confidence(self):
+        result = parse_chairman_response(
+            '{"verdict":"ship","risk_score":2,"confidence":8,"action_items":[],"consensus":[],"disputes":[]}'
+        )
+        self.assertEqual(result["confidence"], 8)
+        # Missing confidence degrades to the -1 sentinel, not a crash.
+        legacy = parse_chairman_response('{"verdict":"ship","risk_score":2,"action_items":[]}')
+        self.assertEqual(legacy["confidence"], -1)
+
+    def test_specificity_score_parse_failed_returns_sentinel(self):
+        result = parse_chairman_response("not json at all")
+
+        self.assertEqual(result["_parse_tier"], "parse_failed")
+        self.assertEqual(_specificity_score(result, "not json at all"), -1.0)
 
     def test_specificity_score_rewards_concrete_action_items(self):
         result = {
@@ -219,6 +246,98 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(phase_two_calls), 3)
         self.assertEqual(events[-1]["type"], "done")
 
+    async def test_stream_passes_timeout_to_litellm(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_acompletion(**kwargs):
+            captured.update(kwargs)
+
+            async def gen():
+                yield types.SimpleNamespace(
+                    choices=[types.SimpleNamespace(
+                        delta=types.SimpleNamespace(content="hi", tool_calls=None),
+                        finish_reason="stop",
+                    )],
+                    usage=None,
+                )
+
+            return gen()
+
+        queue = asyncio.Queue()
+        with patch("orchestrator.litellm.acompletion", new=fake_acompletion):
+            await orchestrator._stream_llm_to_queue(
+                "architect",
+                {"label": "Architect", "model": "test/tiny"},
+                1,
+                [{"role": "user", "content": "hi"}],
+                queue,
+                100,
+                run_id=None,
+            )
+
+        self.assertIn("timeout", captured)
+        self.assertEqual(captured["timeout"], orchestrator_module.LLM_TIMEOUT_S)
+
+    async def test_run_marks_partial_when_member_errors(self):
+        orchestrator = CouncilOrchestrator()
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            errored = phase == 1 and member_id == "security"
+            event = {"type": "member_done", "member": member_id, "full_text": f"{member_id}-{phase}", "errored": errored}
+            if errored:
+                event["error"] = "boom"
+            await queue.put(event)
+            return event["full_text"]
+
+        captured_status = {}
+
+        def fake_finish(run_id, status, error=None):
+            captured_status["status"] = status
+            captured_status["error"] = error
+
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch("orchestrator.run_store.finish_run", side_effect=fake_finish), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("ship it", None, deep_debate=False, run_id="partial-run")]
+
+        done_event = events[-1]
+        self.assertEqual(done_event["type"], "done")
+        self.assertEqual(done_event["status"], "partial")
+        self.assertIn("security", done_event["errored_members"])
+        self.assertEqual(captured_status["status"], "partial")
+
+    async def test_run_caps_oversized_roster(self):
+        orchestrator = CouncilOrchestrator()
+        phase1_members = []
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            if phase == 1:
+                phase1_members.append(member_id)
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "ok"})
+            return "ok"
+
+        oversized = {f"m{i}": {"label": f"M{i}", "model": "test/tiny", "persona": "p"} for i in range(12)}
+        oversized["chairman"] = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("ship it", None, oversized, deep_debate=False, run_id="capped-run")]
+
+        self.assertEqual(len(phase1_members), orchestrator_module.MAX_COUNCIL_MEMBERS)
+        warnings = [e for e in events if e.get("type") == "warning"]
+        self.assertTrue(any("cap" in w["message"].lower() for w in warnings))
+
     async def test_member_review_caps_total_prompt_budget(self):
         orchestrator = CouncilOrchestrator()
         captured = {}
@@ -271,6 +390,86 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         brief = captured["messages"][1]["content"]
         self.assertLessEqual(_count_tokens("test/tiny", brief), 4096 - orchestrator._token_budget["phase3"] - 500)
+
+    async def test_chairman_skip_path_uses_honest_note_not_fake_reviews(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "{}"})
+            return "{}"
+
+        chairman_cfg = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+        members_config = {"peer_a": {"label": "Peer A"}, "peer_b": {"label": "Peer B"}}
+        analyses = {"peer_a": "analysis a", "peer_b": "analysis b"}
+        reviews = {"peer_a": "SKIPPED - unanimous stub", "peer_b": "SKIPPED - unanimous stub"}
+
+        with patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._chairman_decide(
+                chairman_cfg, members_config, analyses, reviews, queue,
+                phase2_note="high agreement (min pairwise 0.95)",
+            )
+
+        brief = captured["messages"][1]["content"]
+        self.assertIn("Phase 2 cross-review was SKIPPED", brief)
+        self.assertIn("high agreement", brief)
+        self.assertNotIn("unanimous stub", brief)
+
+    async def test_chairman_fair_allocation_keeps_every_member(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "{}"})
+            return "{}"
+
+        chairman_cfg = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+        members_config = {
+            "peer_a": {"label": "PeerAAA"},
+            "peer_b": {"label": "PeerBBB"},
+            "peer_c": {"label": "PeerCCC"},
+        }
+        # Oversized analyses force truncation; every member label must still appear.
+        analyses = {"peer_a": "a " * 9000, "peer_b": "b " * 9000, "peer_c": "c " * 9000}
+        reviews = {"peer_a": "ra " * 5000, "peer_b": "rb " * 5000, "peer_c": "rc " * 5000}
+
+        with patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._chairman_decide(chairman_cfg, members_config, analyses, reviews, queue)
+
+        brief = captured["messages"][1]["content"]
+        for label in ("PeerAAA", "PeerBBB", "PeerCCC"):
+            self.assertIn(label, brief)
+
+    async def test_member_review_keeps_all_peers_under_pressure(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "done"})
+            return "done"
+
+        cfg = {"label": "Reviewer", "model": "test/tiny", "persona": "test"}
+        members_config = {
+            "reviewer": cfg,
+            "peer_a": {"label": "PeerAAA"},
+            "peer_b": {"label": "PeerBBB"},
+        }
+        analyses = {"reviewer": "self", "peer_a": "a " * 20000, "peer_b": "b " * 20000}
+
+        with patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._member_review("reviewer", cfg, members_config, analyses, queue)
+
+        prompt = captured["messages"][1]["content"]
+        self.assertIn("PeerAAA", prompt)
+        self.assertIn("PeerBBB", prompt)
 
     async def test_run_applies_economy_token_budget_profile(self):
         orchestrator = CouncilOrchestrator()
