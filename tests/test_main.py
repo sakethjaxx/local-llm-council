@@ -449,7 +449,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             body = await main.get_metrics_quality(limit=25)
 
         self.assertEqual(body, expected)
-        quality.assert_called_once_with(limit=25)
+        quality.assert_called_once_with(25)
 
     async def test_project_code_graph_endpoint(self):
         body = await main.project_code_graph()

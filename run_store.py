@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 
 from logging_utils import get_logger
-from provider_caps import redact_config
+from provider_caps import redact_config, scrub_secret_values
 
 
 DB_PATH = "council_runs.db"
@@ -213,7 +213,7 @@ class RunStore:
                     (
                         run_id,
                         time.time(),
-                        topic or "",
+                        scrub_secret_values(topic or ""),
                         roster_json,
                         fingerprint_hash,
                         int(bool(deep_debate)),
@@ -255,7 +255,7 @@ class RunStore:
                         run_id,
                         phase,
                         member_id,
-                        output or "",
+                        scrub_secret_values(output or ""),
                         tokens_in,
                         tokens_out,
                         latency_ms,

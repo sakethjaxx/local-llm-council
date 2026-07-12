@@ -75,12 +75,20 @@ except (ValueError, AttributeError):
 async def lifespan(app: FastAPI):
     del app
     clear_shutdown_request()
-    asyncio.create_task(asyncio.to_thread(memory_store.rebuild_embeddings))
-    asyncio.create_task(asyncio.to_thread(memory_store.prune_memory))
-    asyncio.create_task(asyncio.to_thread(skill_registry.deduplicate_skills))
+    # Startup maintenance — fire-and-forget, but swallow exceptions so a failing
+    # background task doesn't spam "Task exception was never retrieved".
+    for coro in (
+        asyncio.to_thread(memory_store.rebuild_embeddings),
+        asyncio.to_thread(memory_store.prune_memory),
+        asyncio.to_thread(skill_registry.deduplicate_skills),
+    ):
+        t = asyncio.create_task(coro)
+        t.add_done_callback(lambda done: done.exception())
     yield
-    if is_shutdown_requested():
-        await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
+    # Drain on ANY shutdown (SIGINT/Ctrl-C, SIGTERM, or normal exit), not only
+    # SIGTERM. Signal in-flight streams to wind down, then wait briefly for them.
+    request_shutdown()
+    await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
 
 
 app = FastAPI(
@@ -205,10 +213,17 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/demo-samples", StaticFiles(directory="demo_samples"), name="demo-samples")
 
 
+_INDEX_HTML_CACHE: Optional[str] = None
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    with open("static/index.html") as f:
-        return f.read()
+    global _INDEX_HTML_CACHE
+    if _INDEX_HTML_CACHE is None:
+        _INDEX_HTML_CACHE = await asyncio.to_thread(
+            lambda: open("static/index.html").read()
+        )
+    return _INDEX_HTML_CACHE
 
 
 @app.post("/council/stream")
@@ -275,7 +290,7 @@ async def council_stream(
                 if is_shutdown_requested():
                     yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
                     return
-                model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                 yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
                 if config_parse_error:
                     yield f"data: {json.dumps({'type': 'warning', 'message': 'Invalid council_config JSON — using default roster. (' + config_parse_error + ')'})}\n\n"
@@ -296,12 +311,12 @@ async def council_stream(
                     if new_roster:
                         new_roster["chairman"] = cfg.get("chairman")
                         cfg = new_roster
-                        model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                        model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                         yield f"data: {json.dumps({'type': 'swarm_routed', 'config': redact_config(cfg)})}\n\n"
                         yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                         if not model_status["ready"]:
                             cfg = copy.deepcopy(config_dict or get_default_council_config())
-                            model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                            model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                             yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm selected models that are not installed. Falling back to the stable demo roster.'})}\n\n"
                             yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                     else:
@@ -520,7 +535,7 @@ async def review_project(req: ReviewProjectRequest, request: Request):
                 yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
                 yield f"data: {json.dumps({'type': 'project_info', 'path': root, 'files_selected': top_files, 'total_files': graph_data['stats']['files']})}\n\n"
 
-                model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
+                model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Missing models: ' + ', '.join(model_status['missing'])})}\n\n"
@@ -569,7 +584,8 @@ async def config_presets():
 
 @app.get("/runs")
 async def list_persisted_runs(limit: int = 50, fingerprint_hash: Optional[str] = None):
-    return {"runs": run_store.list_runs(limit=limit, fingerprint_hash=fingerprint_hash)}
+    runs = await asyncio.to_thread(run_store.list_runs, limit, fingerprint_hash)
+    return {"runs": runs}
 
 
 @app.get("/skills")
@@ -580,13 +596,13 @@ async def list_skills(limit: int = 50, domain: Optional[str] = None):
 
 @app.get("/runs/{run_id}")
 async def get_persisted_run(run_id: str):
-    return run_store.get_run(run_id)
+    return await asyncio.to_thread(run_store.get_run, run_id)
 
 
 @app.get("/runs/{run_id}/export")
 async def export_persisted_run(run_id: str, format: str = "md"):
     export_format = (format or "md").strip().lower()
-    run = redact_config(run_store.get_run(run_id))
+    run = redact_config(await asyncio.to_thread(run_store.get_run, run_id))
     metrics = _metrics_run_for_export(run_id)
 
     if not run:
@@ -634,13 +650,13 @@ async def export_persisted_run(run_id: str, format: str = "md"):
 
 @app.delete("/runs/{run_id}")
 async def delete_persisted_run(run_id: str):
-    deleted = run_store.delete_run(run_id)
+    deleted = await asyncio.to_thread(run_store.delete_run, run_id)
     return {"run_id": run_id, "deleted": deleted}
 
 
 @app.post("/runs/{run_id}/feedback")
 async def record_run_feedback(run_id: str, req: FeedbackRequest):
-    run_store.record_feedback(run_id, req.action_index, req.rating, req.note)
+    await asyncio.to_thread(run_store.record_feedback, run_id, req.action_index, req.rating, req.note)
     return {"run_id": run_id, "action_index": req.action_index, "rating": req.rating, "recorded": True}
 
 
@@ -717,7 +733,7 @@ async def get_metrics_summary():
 
 @app.get("/metrics/quality")
 async def get_metrics_quality(limit: int = 100):
-    return run_store.list_quality_metrics(limit=max(1, min(limit, 500)))
+    return await asyncio.to_thread(run_store.list_quality_metrics, max(1, min(limit, 500)))
 
 
 if __name__ == "__main__":
@@ -733,4 +749,7 @@ if __name__ == "__main__":
             "Set COUNCIL_API_KEY or use COUNCIL_HOST=127.0.0.1"
         )
 
-    uvicorn.run("main:app", host=host, port=port, reload=True)
+    # Auto-reload watches the filesystem and drops active SSE streams on any
+    # file change (e.g. the sandbox temp file) — off by default, opt-in for dev.
+    reload = os.getenv("COUNCIL_RELOAD", "false").strip().lower() == "true"
+    uvicorn.run("main:app", host=host, port=port, reload=reload)

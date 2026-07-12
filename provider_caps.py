@@ -1,5 +1,31 @@
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
+
+
+# Value-level secret scrubbing. Key-name redaction misses secrets that arrive as
+# free text — a user pasting their own key into a topic/note/attachment, or an LLM
+# echoing one back. These land in council_runs.db / council_metrics.jsonl and
+# exports unless scrubbed here (redact_config runs at every serialization edge).
+_SECRET_VALUE_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),                 # OpenAI / Anthropic-style
+    re.compile(r"sk-ant-[A-Za-z0-9_-]{16,}"),             # Anthropic
+    re.compile(r"AKIA[0-9A-Z]{16}"),                      # AWS access key id
+    re.compile(r"AIza[0-9A-Za-z_-]{35}"),                 # Google API key
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),            # GitHub tokens
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),          # Slack tokens
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{20,}"),      # Bearer tokens
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),  # JWT
+]
+_SECRET_REPLACEMENT = "[REDACTED_SECRET]"
+
+
+def scrub_secret_values(text: str) -> str:
+    if not text:
+        return text
+    for pattern in _SECRET_VALUE_PATTERNS:
+        text = pattern.sub(_SECRET_REPLACEMENT, text)
+    return text
 
 
 @dataclass(frozen=True)
@@ -112,6 +138,8 @@ def redact_config(cfg: dict) -> dict:
             return result
         if isinstance(value, list):
             return [redact(item) for item in value]
+        if isinstance(value, str):
+            return scrub_secret_values(value)
         return value
 
     return redact(deepcopy(cfg or {}))

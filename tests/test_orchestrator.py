@@ -382,6 +382,86 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         brief = captured["messages"][1]["content"]
         self.assertLessEqual(_count_tokens("test/tiny", brief), 4096 - orchestrator._token_budget["phase3"] - 500)
 
+    async def test_chairman_skip_path_uses_honest_note_not_fake_reviews(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "{}"})
+            return "{}"
+
+        chairman_cfg = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+        members_config = {"peer_a": {"label": "Peer A"}, "peer_b": {"label": "Peer B"}}
+        analyses = {"peer_a": "analysis a", "peer_b": "analysis b"}
+        reviews = {"peer_a": "SKIPPED - unanimous stub", "peer_b": "SKIPPED - unanimous stub"}
+
+        with patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._chairman_decide(
+                chairman_cfg, members_config, analyses, reviews, queue,
+                phase2_note="high agreement (min pairwise 0.95)",
+            )
+
+        brief = captured["messages"][1]["content"]
+        self.assertIn("Phase 2 cross-review was SKIPPED", brief)
+        self.assertIn("high agreement", brief)
+        self.assertNotIn("unanimous stub", brief)
+
+    async def test_chairman_fair_allocation_keeps_every_member(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "{}"})
+            return "{}"
+
+        chairman_cfg = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+        members_config = {
+            "peer_a": {"label": "PeerAAA"},
+            "peer_b": {"label": "PeerBBB"},
+            "peer_c": {"label": "PeerCCC"},
+        }
+        # Oversized analyses force truncation; every member label must still appear.
+        analyses = {"peer_a": "a " * 9000, "peer_b": "b " * 9000, "peer_c": "c " * 9000}
+        reviews = {"peer_a": "ra " * 5000, "peer_b": "rb " * 5000, "peer_c": "rc " * 5000}
+
+        with patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._chairman_decide(chairman_cfg, members_config, analyses, reviews, queue)
+
+        brief = captured["messages"][1]["content"]
+        for label in ("PeerAAA", "PeerBBB", "PeerCCC"):
+            self.assertIn(label, brief)
+
+    async def test_member_review_keeps_all_peers_under_pressure(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            captured["messages"] = messages
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "done"})
+            return "done"
+
+        cfg = {"label": "Reviewer", "model": "test/tiny", "persona": "test"}
+        members_config = {
+            "reviewer": cfg,
+            "peer_a": {"label": "PeerAAA"},
+            "peer_b": {"label": "PeerBBB"},
+        }
+        analyses = {"reviewer": "self", "peer_a": "a " * 20000, "peer_b": "b " * 20000}
+
+        with patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            queue = asyncio.Queue()
+            await orchestrator._member_review("reviewer", cfg, members_config, analyses, queue)
+
+        prompt = captured["messages"][1]["content"]
+        self.assertIn("PeerAAA", prompt)
+        self.assertIn("PeerBBB", prompt)
+
     async def test_run_applies_economy_token_budget_profile(self):
         orchestrator = CouncilOrchestrator()
         max_tokens_by_phase = {}

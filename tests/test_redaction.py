@@ -4,11 +4,44 @@ import sqlite3
 import tempfile
 import unittest
 
-from provider_caps import redact_config
+from provider_caps import redact_config, scrub_secret_values
 from run_store import RunStore
 
 
 class RedactionTests(unittest.TestCase):
+    def test_scrub_secret_values_masks_free_text_keys(self):
+        text = "here is my key sk-abcdef_1234567890ABCDEF and AKIAIOSFODNN7EXAMPLE"
+        scrubbed = scrub_secret_values(text)
+        self.assertNotIn("sk-abcdefe_1234567890ABCDEF"[:20], scrubbed)
+        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", scrubbed)
+        self.assertIn("[REDACTED_SECRET]", scrubbed)
+
+    def test_redact_config_scrubs_secrets_in_string_values(self):
+        redacted = redact_config({"topic": "please review sk-abcdefghijklmnop12345 in prod"})
+        self.assertNotIn("sk-abcdefghijklmnop12345", redacted["topic"])
+        self.assertIn("[REDACTED_SECRET]", redacted["topic"])
+
+    def test_pasted_secret_in_topic_and_output_not_persisted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "runs.db")
+            store = RunStore(db_path)
+            store.begin_run(
+                "secret-run",
+                "audit my key sk-abcdefghijklmnop12345 please",
+                {"architect": {"model": "ollama/qwen2.5:7b"}},
+                deep_debate=False,
+            )
+            store.record_phase_output("secret-run", 1, "architect", "found AKIAIOSFODNN7EXAMPLE in code")
+
+            with sqlite3.connect(db_path) as conn:
+                topic = conn.execute("SELECT topic FROM runs WHERE run_id = ?", ("secret-run",)).fetchone()[0]
+                output = conn.execute(
+                    "SELECT output FROM phase_outputs WHERE run_id = ? AND phase = 1", ("secret-run",)
+                ).fetchone()[0]
+
+        self.assertNotIn("sk-abcdefghijklmnop12345", topic)
+        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", output)
+        self.assertIn("[REDACTED_SECRET]", topic)
     def test_redact_config_removes_sensitive_keys_recursively(self):
         redacted = redact_config(
             {

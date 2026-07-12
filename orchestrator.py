@@ -53,8 +53,26 @@ MAX_PARALLEL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_PARALLEL_MEMBERS", "4")
 # swarm produces — caps total task/queue creation per run.
 MAX_COUNCIL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_MEMBERS", "8")))
 
+# Max execute_python tool-call recursion depth per member (S2 hardening).
+MAX_TOOL_DEPTH = max(0, int(os.getenv("COUNCIL_MAX_TOOL_DEPTH", "3")))
+
+
+# tiktoken/cl100k_base is only the tokenizer for OpenAI models. For everything
+# else (the primary local Ollama fleet — Qwen/Llama/Mistral/Gemma/DeepSeek — plus
+# Anthropic/Gemini) it is a proxy that typically UNDER-counts, which would let the
+# budget math overflow the real context window. We inflate non-OpenAI estimates by
+# a safety margin so truncation stays conservative.
+_OPENAI_MODEL_PREFIXES = ("gpt-", "gpt3", "gpt4", "o1", "o3", "o4", "chatgpt", "text-embedding", "davinci", "curie")
+TOKEN_SAFETY_MARGIN = float(os.getenv("COUNCIL_TOKEN_SAFETY_MARGIN", "1.15"))
+
+
+def _is_openai_model(model: str) -> bool:
+    base = (model or "").replace("ollama/", "").split("/")[-1].lower()
+    return any(base.startswith(prefix) for prefix in _OPENAI_MODEL_PREFIXES)
+
 
 def _count_tokens(model: str, text: str) -> int:
+    text = text or ""
     try:
         encoding_key = model or "default"
         if encoding_key not in _TOKEN_ENCODINGS:
@@ -62,12 +80,15 @@ def _count_tokens(model: str, text: str) -> int:
                 _TOKEN_ENCODINGS[encoding_key] = tiktoken.encoding_for_model(model.replace("ollama/", ""))
             except KeyError:
                 _TOKEN_ENCODINGS[encoding_key] = tiktoken.get_encoding("cl100k_base")
-        return len(_TOKEN_ENCODINGS[encoding_key].encode(text or ""))
+        count = len(_TOKEN_ENCODINGS[encoding_key].encode(text))
     except Exception:
         try:
-            return litellm.token_counter(model=model, text=text)
+            count = litellm.token_counter(model=model, text=text)
         except Exception:
-            return len(text or "") // 4
+            count = len(text) // 4
+    if not _is_openai_model(model):
+        count = int(count * TOKEN_SAFETY_MARGIN)
+    return count
 
 
 def _truncate_to_token_budget(model: str, text: str, max_tokens: int) -> str:
@@ -77,23 +98,40 @@ def _truncate_to_token_budget(model: str, text: str, max_tokens: int) -> str:
     if _count_tokens(model, text) <= max_tokens:
         return text
 
-    marker_tokens = _count_tokens(model, marker)
-    target_tokens = max_tokens - marker_tokens
-    if target_tokens <= 0:
-        return marker if marker_tokens <= max_tokens else ""
+    # If even the bare marker doesn't fit, return nothing.
+    if _count_tokens(model, marker) > max_tokens:
+        return ""
 
+    # Binary-search on the MARKER-INCLUDED candidate so the returned string is
+    # guaranteed <= max_tokens. (The token safety margin makes _count_tokens
+    # non-additive, so measuring text and marker separately can overshoot.)
     low = 0
     high = len(text)
     best = ""
     while low <= high:
         mid = (low + high) // 2
         candidate = text[:mid]
-        if _count_tokens(model, candidate) <= target_tokens:
+        if _count_tokens(model, candidate + marker) <= max_tokens:
             best = candidate
             low = mid + 1
         else:
             high = mid - 1
     return best + marker
+
+
+def _render_fair_sections(model: str, items: list[tuple[str, str]], budget: int, head_fmt: str) -> str:
+    """Render labelled sections so each item gets an EQUAL share of the token
+    budget and is individually truncated. Prevents the tail-drop bias where the
+    last members are always the ones cut under context pressure."""
+    if not items or budget <= 0:
+        return ""
+    per_item = max(1, budget // len(items))
+    out = ""
+    for label, text in items:
+        head = head_fmt.format(label=label)
+        body_budget = max(1, per_item - _count_tokens(model, head) - 2)
+        out += head + _truncate_to_token_budget(model, text, body_budget) + "\n\n"
+    return out
 
 
 class ChairmanDecision(BaseModel):
@@ -270,6 +308,7 @@ class CouncilOrchestrator:
         response_format=None,
         run_id: Optional[str] = None,
         emit_done: bool = True,
+        tool_depth: int = 0,
     ) -> str:
         logger.info("llm_call_started", extra={"phase": phase, "model": cfg.get("model"), "label": cfg.get("label")})
 
@@ -283,8 +322,11 @@ class CouncilOrchestrator:
         errored = False
         last_error = None
 
+        # Cap tool-call recursion: each iteration spawns a fresh sandbox container,
+        # and an injected model could otherwise loop execute_python indefinitely
+        # (DoS + cloud-cost amplification). Stop offering the tool past the limit.
         tools = None
-        if phase == 1 and self._python_tool_enabled_for_model(cfg.get("model", "")):
+        if phase == 1 and tool_depth < MAX_TOOL_DEPTH and self._python_tool_enabled_for_model(cfg.get("model", "")):
             tools = [
                 {
                     "type": "function",
@@ -423,6 +465,7 @@ class CouncilOrchestrator:
                                 response_format=response_format,
                                 run_id=None,
                                 emit_done=False,
+                                tool_depth=tool_depth + 1,
                             )
                             full_text += sys_msg + additional_text
                             followup_completed = True
@@ -540,26 +583,20 @@ class CouncilOrchestrator:
     ):
         system_prompt = PHASE2_PROMPT.format(persona=cfg.get("persona", ""))
 
-        prompt_parts = ["You are reviewing analyses from your peers:\n"]
         model_id = cfg.get("model", "")
         context_window = caps_for(model_id)[0].context_window or 4096
-        max_total_input_tokens = context_window - self._token_budget["phase2"] - 800
-        max_total_input_tokens = max(125, max_total_input_tokens)
-        peers = [(peer_id, analysis) for peer_id, analysis in analyses.items() if peer_id != member_id]
-
-        for peer_id, analysis in peers:
-            peer_label = members_config[peer_id].get("label", peer_id)
-            prompt_parts.append(f"--- {peer_label} ---\n{analysis}\n")
-        
-        prompt = "\n".join(prompt_parts)
-        original_tokens = _count_tokens(model_id, prompt)
-        if original_tokens > max_total_input_tokens:
-            original_len = len(prompt)
-            prompt = _truncate_to_token_budget(model_id, prompt, max_total_input_tokens)
-            logger.info(
-                "phase2_input_truncated",
-                extra={"model": cfg.get("model", ""), "original_chars": original_len, "truncated_chars": len(prompt)},
-            )
+        header = "You are reviewing analyses from your peers:\n\n"
+        max_total_input_tokens = max(125, context_window - self._token_budget["phase2"] - 800)
+        peers_budget = max(1, max_total_input_tokens - _count_tokens(model_id, header))
+        peer_items = [
+            (members_config[peer_id].get("label", peer_id), analysis)
+            for peer_id, analysis in analyses.items()
+            if peer_id != member_id
+        ]
+        # Fair-share the budget across peers so every peer's analysis survives
+        # under context pressure, rather than truncating the concatenated blob
+        # (which dropped later peers wholesale).
+        prompt = header + _render_fair_sections(model_id, peer_items, peers_budget, "--- {label} ---\n")
         messages = self._build_messages(cfg.get("model", ""), system_prompt, prompt)
         async with self._member_slot():
             await self._stream_llm_to_queue(
@@ -580,74 +617,69 @@ class CouncilOrchestrator:
         reviews: dict[str, str],
         queue: asyncio.Queue,
         run_id: Optional[str] = None,
+        phase2_note: Optional[str] = None,
     ):
-        # 1. Chairman Web Search (Optional)
-        search_results = await get_search_context(reviews, chairman_cfg["model"])
-
-        council_brief = ""
-        if search_results:
-            council_brief += search_results + "\n\n"
-            
-        for member, analysis in analyses.items():
-            cfg = members_config.get(member, {})
-            council_brief += f"=== {cfg.get('label', member)} ANALYSIS ===\n{analysis}\n\n"
-        council_brief += "\n--- PEER REVIEWS ---\n\n"
-        for reviewer, review in reviews.items():
-            cfg = members_config.get(reviewer, {})
-            council_brief += f"=== {cfg.get('label', reviewer)} REVIEW ===\n{review}\n\n"
-
+        phase2_skipped = phase2_note is not None
         chairman_model = chairman_cfg.get("model", "")
+
+        # 1. Chairman Web Search (Optional). Detect disputes over REAL content —
+        # when Phase 2 was skipped the "reviews" are stubs, so use the analyses.
+        search_results = await get_search_context(
+            analyses if phase2_skipped else reviews, chairman_cfg["model"]
+        )
+
         context_window = caps_for(chairman_model)[0].context_window or 4096
-        max_input_tokens = context_window - self._token_budget["phase3"] - 500
-        max_input_tokens = max(1, max_input_tokens)
-        original_len = len(council_brief)
-        original_tokens = _count_tokens(chairman_model, council_brief)
-        if original_tokens > max_input_tokens:
-            rebuilt_parts = []
-            used_tokens = 0
-            truncated = False
+        max_input_tokens = max(1, context_window - self._token_budget["phase3"] - 500)
 
-            def add_section(section: str) -> bool:
-                nonlocal used_tokens, truncated
-                section_tokens = _count_tokens(chairman_model, section)
-                if used_tokens + section_tokens > max_input_tokens:
-                    truncated = True
-                    return False
-                rebuilt_parts.append(section)
-                used_tokens += section_tokens
-                return True
+        header = ""
+        if search_results:
+            header += search_results + "\n\n"
 
-            if search_results:
-                add_section(search_results + "\n\n")
+        # Peer-review block. On the skip path, tell the chairman honestly that
+        # Phase 2 did not run (and why) instead of feeding it fabricated
+        # "unanimous agreement" stubs as if they were real cross-review.
+        if phase2_skipped:
+            peer_block = (
+                "\n--- PEER REVIEWS ---\n"
+                f"[Phase 2 cross-review was SKIPPED: {phase2_note}. No peer critiques "
+                "were produced — derive consensus and disputes yourself from the "
+                "Phase 1 analyses below.]\n\n"
+            )
+        else:
+            review_items = [
+                (members_config.get(r, {}).get("label", r), text) for r, text in reviews.items()
+            ]
 
-            if not truncated:
-                for member, analysis in analyses.items():
-                    cfg = members_config.get(member, {})
-                    section = f"=== {cfg.get('label', member)} ANALYSIS ===\n{analysis}\n\n"
-                    if not add_section(section):
-                        break
+        analysis_items = [
+            (members_config.get(m, {}).get("label", m), text) for m, text in analyses.items()
+        ]
 
-            if not truncated:
-                review_header = "\n--- PEER REVIEWS ---\n\n"
-                for reviewer, review in reviews.items():
-                    cfg = members_config.get(reviewer, {})
-                    prefix = review_header if reviewer == next(iter(reviews), None) else ""
-                    section = f"{prefix}=== {cfg.get('label', reviewer)} REVIEW ===\n{review}\n\n"
-                    if not add_section(section):
-                        break
+        budget_after_header = max(1, max_input_tokens - _count_tokens(chairman_model, header))
+        if phase2_skipped:
+            analyses_budget = max(1, budget_after_header - _count_tokens(chairman_model, peer_block))
+            analyses_block = _render_fair_sections(
+                chairman_model, analysis_items, analyses_budget, "=== {label} ANALYSIS ===\n"
+            )
+        else:
+            # Split remaining budget 60/40 between analyses and peer reviews, each
+            # fair-shared internally so every member is represented.
+            analyses_budget = max(1, int(budget_after_header * 0.6))
+            reviews_budget = max(1, budget_after_header - analyses_budget)
+            analyses_block = _render_fair_sections(
+                chairman_model, analysis_items, analyses_budget, "=== {label} ANALYSIS ===\n"
+            )
+            peer_block = "\n--- PEER REVIEWS ---\n\n" + _render_fair_sections(
+                chairman_model, review_items, reviews_budget, "=== {label} REVIEW ===\n"
+            )
 
-            council_brief = "".join(rebuilt_parts)
-            marker = "\n[truncated]"
-            marker_tokens = _count_tokens(chairman_model, marker)
-            if truncated and used_tokens + marker_tokens <= max_input_tokens:
-                council_brief += marker
+        council_brief = header + analyses_block + peer_block
 
-            if _count_tokens(chairman_model, council_brief) > max_input_tokens:
-                council_brief = _truncate_to_token_budget(chairman_model, council_brief, max_input_tokens)
-
+        # Final safety net in case the fair-share estimate still overshoots.
+        if _count_tokens(chairman_model, council_brief) > max_input_tokens:
+            council_brief = _truncate_to_token_budget(chairman_model, council_brief, max_input_tokens)
             logger.info(
                 "phase3_input_truncated",
-                extra={"model": chairman_cfg.get("model"), "original_chars": original_len, "truncated_chars": len(council_brief)},
+                extra={"model": chairman_model, "truncated_chars": len(council_brief)},
             )
 
         messages = self._build_messages(
@@ -751,8 +783,10 @@ class CouncilOrchestrator:
 
             reviews = {}
             phase1_divergence = None
+            phase2_note = None
 
             if not deep_debate:
+                phase2_note = "Fast mode was enabled (cross-review bypassed for latency)"
                 yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (Bypassed - Fast Mode)"}
                 for member in council_members:
                     reviews[member] = "SKIPPED - Fast Code Review mode enabled. Bypassing debate for latency."
@@ -765,6 +799,7 @@ class CouncilOrchestrator:
                 await asyncio.to_thread(run_store.update_smart_phase_score, run_id, smart_score)
 
                 if is_unanimous:
+                    phase2_note = f"high inter-analysis agreement (min pairwise similarity {round(smart_score, 3)} > threshold {smart_phase.SKIP_THRESHOLD})"
                     yield {"type": "phase_start", "phase": 2, "label": "Cross-Review (SKIPPED - Unanimous Consensus!)"}
                     for member in council_members:
                         reviews[member] = "SKIPPED - The council was in unanimous agreement during Phase 1. No factual disputes detected."
@@ -798,7 +833,7 @@ class CouncilOrchestrator:
 
             queue = asyncio.Queue()
             spawned_tasks.append(asyncio.create_task(
-                self._chairman_decide(chairman_cfg, config, analyses, reviews, queue, run_id=run_id)
+                self._chairman_decide(chairman_cfg, config, analyses, reviews, queue, run_id=run_id, phase2_note=phase2_note)
             ))
 
             completed = 0
