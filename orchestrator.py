@@ -51,10 +51,10 @@ MAX_PARALLEL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_PARALLEL_MEMBERS", "4")
 
 # Hard ceiling on roster size regardless of what a client config or the dynamic
 # swarm produces — caps total task/queue creation per run.
-MAX_COUNCIL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_MEMBERS", "8")))
+MAX_COUNCIL_MEMBERS = 8
 
 # Max execute_python tool-call recursion depth per member (S2 hardening).
-MAX_TOOL_DEPTH = max(0, int(os.getenv("COUNCIL_MAX_TOOL_DEPTH", "3")))
+MAX_TOOL_DEPTH = 3
 
 
 # tiktoken/cl100k_base is only the tokenizer for OpenAI models. For everything
@@ -63,7 +63,7 @@ MAX_TOOL_DEPTH = max(0, int(os.getenv("COUNCIL_MAX_TOOL_DEPTH", "3")))
 # budget math overflow the real context window. We inflate non-OpenAI estimates by
 # a safety margin so truncation stays conservative.
 _OPENAI_MODEL_PREFIXES = ("gpt-", "gpt3", "gpt4", "o1", "o3", "o4", "chatgpt", "text-embedding", "davinci", "curie")
-TOKEN_SAFETY_MARGIN = float(os.getenv("COUNCIL_TOKEN_SAFETY_MARGIN", "1.15"))
+TOKEN_SAFETY_MARGIN = 1.15
 
 
 def _is_openai_model(model: str) -> bool:
