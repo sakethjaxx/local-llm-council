@@ -36,7 +36,7 @@ from orchestrator import CouncilOrchestrator
 from provider_caps import redact_config, supports_image_input
 from project_graph import get_project_code_graph
 from run_store import DB_PATH as RUN_DB_PATH, run_store
-from shutdown_state import clear_shutdown_request, is_shutdown_requested, request_shutdown, track_active_stream, wait_for_active_streams
+from shutdown_state import active_stream_count, clear_shutdown_request, is_shutdown_requested, request_shutdown, track_active_stream, wait_for_active_streams
 from skill_registry import skill_registry
 
 load_dotenv()
@@ -140,6 +140,27 @@ def _shutdown_event_payload() -> dict:
     return {"type": "shutdown", "message": "Server shutdown requested. Active stream is closing."}
 
 
+# Max concurrent SSE council runs — bounds resource/cost exhaustion on an exposed
+# instance. A constant, not a knob (edit if your hardware runs more in parallel).
+MAX_CONCURRENT_STREAMS = 8
+
+
+def _reject_if_overloaded() -> None:
+    if active_stream_count() >= MAX_CONCURRENT_STREAMS:
+        raise HTTPException(status_code=429, detail="Server busy: too many concurrent council runs")
+
+
+def _confine_to_project_root(candidate: str) -> str:
+    """Resolve a caller-supplied path and confine it to COUNCIL_PROJECT_ROOT
+    (default: cwd). Blocks arbitrary-filesystem reads via review-project /
+    code-graph on an exposed instance."""
+    root = os.path.abspath(os.getenv("COUNCIL_PROJECT_ROOT", os.getcwd()))
+    resolved = os.path.abspath(candidate)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise HTTPException(status_code=403, detail="Path is outside the allowed project root (set COUNCIL_PROJECT_ROOT)")
+    return resolved
+
+
 def _metrics_run_for_export(run_id: str) -> dict:
     for run in metrics_store.list_runs(limit=500):
         if run.get("run_id") == run_id:
@@ -241,6 +262,7 @@ async def council_stream(
     """
     SSE endpoint — streams council events as they happen.
     """
+    _reject_if_overloaded()
     max_files = _int_env("COUNCIL_MAX_FILES", 10)
     max_upload_mb = _int_env("COUNCIL_MAX_UPLOAD_MB", 20)
     max_upload_bytes = max_upload_mb * 1024 * 1024
@@ -379,6 +401,7 @@ async def council_chat(req: ChatRequest, request: Request):
     """
     Interactive Debate Mode — stream a reply from a specific member
     """
+    _reject_if_overloaded()
     orchestrator = CouncilOrchestrator()
     run_id = metrics_store.start_run("chat", {"member_id": req.member_id})
     
@@ -504,9 +527,9 @@ class ReviewProjectRequest(BaseModel):
 
 @app.post("/council/review-project")
 async def review_project(req: ReviewProjectRequest, request: Request):
-    root = os.path.abspath(req.path)
+    _reject_if_overloaded()
+    root = _confine_to_project_root(req.path)
     if not os.path.isdir(root):
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
 
     graph_data = await asyncio.to_thread(get_project_code_graph, root)
@@ -569,7 +592,7 @@ async def review_project(req: ReviewProjectRequest, request: Request):
 
 @app.get("/project/code-graph")
 async def project_code_graph(path: str = "."):
-    return get_project_code_graph(path)
+    return await asyncio.to_thread(get_project_code_graph, _confine_to_project_root(path))
 
 
 @app.get("/demo/catalog")

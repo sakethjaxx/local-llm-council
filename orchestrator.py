@@ -137,6 +137,7 @@ def _render_fair_sections(model: str, items: list[tuple[str, str]], budget: int,
 class ChairmanDecision(BaseModel):
     verdict: str
     risk_score: int
+    confidence: int = 5
     action_items: List[str]
     consensus: List[str] = []
     disputes: List[str] = []
@@ -164,6 +165,7 @@ def parse_chairman_response(raw: str) -> dict:
         return {
             "verdict": result.get("verdict", "parse_failed"),
             "risk_score": result.get("risk_score", -1),
+            "confidence": result.get("confidence", -1),
             "action_items": result.get("action_items", []),
             "consensus": consensus,
             "disputes": result.get("disputes", []),

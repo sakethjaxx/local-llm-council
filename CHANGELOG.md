@@ -4,6 +4,15 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Exposed-deployment hardening
+- The Docker image now starts via `main.py` (default bind `127.0.0.1`), so the startup guard that requires `COUNCIL_API_KEY` before binding a non-localhost interface can no longer be bypassed. Exposing the container now requires both `COUNCIL_HOST=0.0.0.0` and an API key.
+- Confined `review-project` / `code-graph` to `COUNCIL_PROJECT_ROOT` (default cwd) — arbitrary-filesystem reads are rejected with 403.
+- Added a concurrent-council-run cap (429 when exceeded) on the streaming endpoints to bound resource/cost exhaustion.
+
+### Grounding & summarization (NLP)
+- The chairman now reports a `confidence` (0–10) and is instructed to ground claims in what members actually wrote and to treat web-search context as low-trust.
+- Summarizer now overlaps chunks (cross-chunk references survive), hard-splits oversized single lines, and runs a reduce/consolidation pass so many-segment inputs collapse into one coherent brief.
+
 ### Answer quality (NLP)
 - Fixed token counting for the local model fleet: non-OpenAI models (Ollama/Anthropic/Gemini) now apply a safety margin so budgets no longer silently overflow the real context window.
 - Rebuilt the consensus gate: whole-document embedding (chunk + mean-pool, beating MiniLM's 256-token cap), gating on the **minimum** pairwise similarity so a single dissenter blocks the Phase 2 skip, plus a high-precision explicit-disagreement veto and richer calibration logging.

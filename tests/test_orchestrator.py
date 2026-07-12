@@ -92,6 +92,15 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["action_items"], ["do x"])
         self.assertEqual(result["_parse_tier"], "json_repaired")
 
+    def test_parse_chairman_response_includes_confidence(self):
+        result = parse_chairman_response(
+            '{"verdict":"ship","risk_score":2,"confidence":8,"action_items":[],"consensus":[],"disputes":[]}'
+        )
+        self.assertEqual(result["confidence"], 8)
+        # Missing confidence degrades to the -1 sentinel, not a crash.
+        legacy = parse_chairman_response('{"verdict":"ship","risk_score":2,"action_items":[]}')
+        self.assertEqual(legacy["confidence"], -1)
+
     def test_specificity_score_parse_failed_returns_sentinel(self):
         result = parse_chairman_response("not json at all")
 

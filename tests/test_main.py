@@ -520,5 +520,29 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(zip_response.body), 0)
 
 
+    def test_confine_to_project_root_blocks_escape(self):
+        from fastapi import HTTPException
+
+        with patch.dict(os.environ, {"COUNCIL_PROJECT_ROOT": "/home/user/local-llm-council"}):
+            # A path inside the root is allowed.
+            ok = main._confine_to_project_root("/home/user/local-llm-council/main.py")
+            self.assertTrue(ok.startswith("/home/user/local-llm-council"))
+            # An escape is rejected with 403.
+            with self.assertRaises(HTTPException) as ctx:
+                main._confine_to_project_root("/etc/passwd")
+            self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_reject_if_overloaded_returns_429(self):
+        from fastapi import HTTPException
+
+        with patch.object(main, "active_stream_count", return_value=main.MAX_CONCURRENT_STREAMS):
+            with self.assertRaises(HTTPException) as ctx:
+                main._reject_if_overloaded()
+            self.assertEqual(ctx.exception.status_code, 429)
+
+        with patch.object(main, "active_stream_count", return_value=0):
+            main._reject_if_overloaded()  # under the cap → no raise
+
+
 if __name__ == "__main__":
     unittest.main()
