@@ -1,5 +1,6 @@
 import litellm
 import asyncio
+import os
 from cloud_keys import litellm_kwargs_for_model
 from logging_utils import get_logger
 
@@ -36,6 +37,7 @@ async def chunk_and_summarize(text: str, base_model: str) -> str:
                 model=base_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=600,
+                timeout=float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
                 **litellm_kwargs_for_model(base_model),
             )
             return f"--- Segment {idx+1} Summary ---\n{resp.choices[0].message.content}\n"

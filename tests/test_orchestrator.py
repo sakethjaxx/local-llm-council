@@ -18,6 +18,7 @@ if "litellm" not in sys.modules:
     litellm_stub.acompletion = _unused_acompletion
     sys.modules["litellm"] = litellm_stub
 
+import orchestrator as orchestrator_module
 from orchestrator import CouncilOrchestrator, DEFAULT_MEMBER_CONFIG, _count_tokens, _specificity_score, parse_chairman_response
 from run_store import RunStore
 
@@ -79,6 +80,23 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["consensus"], [])
         self.assertEqual(result["disputes"], [])
         self.assertEqual(result["_parse_tier"], "parse_failed")
+
+    def test_parse_chairman_response_json_repaired(self):
+        result = parse_chairman_response(
+            'Here is the JSON: {"verdict":"ship","risk_score":3,"action_items":["do x",],'
+            '"consensus":["ok"],"disputes":[]} Hope this helps!'
+        )
+
+        self.assertEqual(result["verdict"], "ship")
+        self.assertEqual(result["risk_score"], 3)
+        self.assertEqual(result["action_items"], ["do x"])
+        self.assertEqual(result["_parse_tier"], "json_repaired")
+
+    def test_specificity_score_parse_failed_returns_sentinel(self):
+        result = parse_chairman_response("not json at all")
+
+        self.assertEqual(result["_parse_tier"], "parse_failed")
+        self.assertEqual(_specificity_score(result, "not json at all"), -1.0)
 
     def test_specificity_score_rewards_concrete_action_items(self):
         result = {
@@ -218,6 +236,98 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         phase_two_calls = [call for call in phases if call[1] == 2]
         self.assertEqual(len(phase_two_calls), 3)
         self.assertEqual(events[-1]["type"], "done")
+
+    async def test_stream_passes_timeout_to_litellm(self):
+        orchestrator = CouncilOrchestrator()
+        captured = {}
+
+        async def fake_acompletion(**kwargs):
+            captured.update(kwargs)
+
+            async def gen():
+                yield types.SimpleNamespace(
+                    choices=[types.SimpleNamespace(
+                        delta=types.SimpleNamespace(content="hi", tool_calls=None),
+                        finish_reason="stop",
+                    )],
+                    usage=None,
+                )
+
+            return gen()
+
+        queue = asyncio.Queue()
+        with patch("orchestrator.litellm.acompletion", new=fake_acompletion):
+            await orchestrator._stream_llm_to_queue(
+                "architect",
+                {"label": "Architect", "model": "test/tiny"},
+                1,
+                [{"role": "user", "content": "hi"}],
+                queue,
+                100,
+                run_id=None,
+            )
+
+        self.assertIn("timeout", captured)
+        self.assertEqual(captured["timeout"], orchestrator_module.LLM_TIMEOUT_S)
+
+    async def test_run_marks_partial_when_member_errors(self):
+        orchestrator = CouncilOrchestrator()
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            errored = phase == 1 and member_id == "security"
+            event = {"type": "member_done", "member": member_id, "full_text": f"{member_id}-{phase}", "errored": errored}
+            if errored:
+                event["error"] = "boom"
+            await queue.put(event)
+            return event["full_text"]
+
+        captured_status = {}
+
+        def fake_finish(run_id, status, error=None):
+            captured_status["status"] = status
+            captured_status["error"] = error
+
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch("orchestrator.run_store.finish_run", side_effect=fake_finish), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("ship it", None, deep_debate=False, run_id="partial-run")]
+
+        done_event = events[-1]
+        self.assertEqual(done_event["type"], "done")
+        self.assertEqual(done_event["status"], "partial")
+        self.assertIn("security", done_event["errored_members"])
+        self.assertEqual(captured_status["status"], "partial")
+
+    async def test_run_caps_oversized_roster(self):
+        orchestrator = CouncilOrchestrator()
+        phase1_members = []
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            if phase == 1:
+                phase1_members.append(member_id)
+            await queue.put({"type": "member_done", "member": member_id, "full_text": "ok"})
+            return "ok"
+
+        oversized = {f"m{i}": {"label": f"M{i}", "model": "test/tiny", "persona": "p"} for i in range(12)}
+        oversized["chairman"] = {"label": "Chairman", "model": "test/tiny", "persona": "chair"}
+
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [event async for event in orchestrator.run("ship it", None, oversized, deep_debate=False, run_id="capped-run")]
+
+        self.assertEqual(len(phase1_members), orchestrator_module.MAX_COUNCIL_MEMBERS)
+        warnings = [e for e in events if e.get("type") == "warning"]
+        self.assertTrue(any("cap" in w["message"].lower() for w in warnings))
 
     async def test_member_review_caps_total_prompt_budget(self):
         orchestrator = CouncilOrchestrator()

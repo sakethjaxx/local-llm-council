@@ -1,4 +1,5 @@
 import litellm
+import os
 import re
 from pydantic import BaseModel
 from typing import Dict
@@ -87,6 +88,7 @@ async def generate_swarm(topic: str, base_model: str) -> dict:
             "model": base_model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 800,
+            "timeout": float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
         }
         if caps_for(base_model)[1].response_format:
             completion_kwargs["response_format"] = SwarmConfig

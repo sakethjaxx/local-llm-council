@@ -39,6 +39,20 @@ from typing import List
 logger = get_logger(__name__)
 _TOKEN_ENCODINGS: dict[str, object] = {}
 
+# Per-call wall-clock ceiling for every LLM request. Without this a hung
+# provider connection stalls a member/phase indefinitely (only interruptible if
+# chunks keep arriving). Configurable via env for slow local hardware.
+LLM_TIMEOUT_S = float(os.getenv("COUNCIL_LLM_TIMEOUT", "180"))
+
+# Upper bound on how many council members may call an LLM concurrently. Roster
+# size is client/dynamic-swarm controlled, so this is the backpressure valve
+# that stops an unbounded stampede against Ollama/cloud providers.
+MAX_PARALLEL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_PARALLEL_MEMBERS", "4")))
+
+# Hard ceiling on roster size regardless of what a client config or the dynamic
+# swarm produces — caps total task/queue creation per run.
+MAX_COUNCIL_MEMBERS = max(1, int(os.getenv("COUNCIL_MAX_MEMBERS", "8")))
+
 
 def _count_tokens(model: str, text: str) -> int:
     try:
@@ -129,6 +143,18 @@ def parse_chairman_response(raw: str) -> dict:
     except Exception:
         pass
 
+    # Tolerant repair: grab the outermost {...} (handles leading/trailing prose
+    # and inline fences) and drop trailing commas before the closing brace/bracket.
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            candidate = raw[start:end + 1]
+            candidate = re.sub(r",(\s*[}\]])", r"\1", candidate)
+            return normalize(json.loads(candidate), "json_repaired")
+    except Exception:
+        pass
+
     verdict_match = re.search(r'"verdict"\s*:\s*"([^"]+)"', raw)
     risk_match = re.search(r'"risk_score"\s*:\s*(\d+(?:\.\d+)?)', raw)
     if verdict_match or risk_match:
@@ -152,6 +178,10 @@ def parse_chairman_response(raw: str) -> dict:
 
 
 def _specificity_score(chairman_result: dict, raw_text: str) -> float:
+    # Distinguish "unparseable output" (-1.0 sentinel) from "parsed but vague"
+    # (0.0) so quality metrics don't conflate a broken response with a weak one.
+    if chairman_result.get("_parse_tier") == "parse_failed":
+        return -1.0
     action_items = chairman_result.get("action_items") or []
     if not action_items:
         return 0.0
@@ -191,6 +221,14 @@ DEFAULT_MEMBER_CONFIG = get_default_council_config()
 class CouncilOrchestrator:
     def __init__(self, **kwargs):
         self._token_budget = token_budget_for(kwargs.get("token_budget_profile"))
+        self._member_semaphore = None
+
+    def _member_slot(self):
+        """Concurrency gate for member LLM calls. Falls back to a no-op context
+        if a caller invokes a worker outside of run() (e.g. in unit tests)."""
+        if self._member_semaphore is None:
+            return contextlib.nullcontext()
+        return self._member_semaphore
 
     def _python_tool_enabled_for_model(self, model: str) -> bool:
         if os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() != "true":
@@ -242,6 +280,8 @@ class CouncilOrchestrator:
         final_attempt = 1
         final_latency_ms = None
         success = False
+        errored = False
+        last_error = None
 
         tools = None
         if phase == 1 and self._python_tool_enabled_for_model(cfg.get("model", "")):
@@ -292,6 +332,7 @@ class CouncilOrchestrator:
                     stream=True,
                     tools=tools,
                     response_format=response_format,
+                    timeout=LLM_TIMEOUT_S,
                     **litellm_kwargs_for_model(cfg["model"]),
                 )
 
@@ -422,6 +463,9 @@ class CouncilOrchestrator:
                     )
                     final_err = f"\n[Error connecting to {cfg['label']}: {error_msg}]"
                     full_text += final_err
+                    errored = True
+                    last_error = error_msg
+                    finish_reason = "error"
                     await queue.put({"type": "member_token", "member": member_id, "chunk": final_err})
                     break
                 if is_retryable and attempt < max_retries - 1:
@@ -431,8 +475,19 @@ class CouncilOrchestrator:
 
         if success:
             await record_success_once()
+        elif errored and run_id:
+            # Persist the errored phase output so the DB matches what was streamed
+            # to the client, instead of silently dropping it.
+            await asyncio.to_thread(
+                run_store.record_phase_output,
+                run_id, phase, member_id, full_text,
+                None, None, final_latency_ms, "error", final_attempt,
+            )
         if emit_done:
-            await queue.put({"type": "member_done", "member": member_id, "full_text": full_text})
+            done_event = {"type": "member_done", "member": member_id, "full_text": full_text, "errored": errored}
+            if errored:
+                done_event["error"] = last_error
+            await queue.put(done_event)
         return full_text
 
     async def _member_analyze(
@@ -463,15 +518,16 @@ class CouncilOrchestrator:
             content.append({"type": "text", "text": "No context provided — analyze the request based on your persona."})
 
         messages = self._build_messages(cfg.get("model", ""), system_prompt, content)
-        await self._stream_llm_to_queue(
-            member_id,
-            cfg,
-            1,
-            messages,
-            queue,
-            self._token_budget["phase1"],
-            run_id=run_id,
-        )
+        async with self._member_slot():
+            await self._stream_llm_to_queue(
+                member_id,
+                cfg,
+                1,
+                messages,
+                queue,
+                self._token_budget["phase1"],
+                run_id=run_id,
+            )
 
     async def _member_review(
         self,
@@ -505,15 +561,16 @@ class CouncilOrchestrator:
                 extra={"model": cfg.get("model", ""), "original_chars": original_len, "truncated_chars": len(prompt)},
             )
         messages = self._build_messages(cfg.get("model", ""), system_prompt, prompt)
-        await self._stream_llm_to_queue(
-            member_id,
-            cfg,
-            2,
-            messages,
-            queue,
-            self._token_budget["phase2"],
-            run_id=run_id,
-        )
+        async with self._member_slot():
+            await self._stream_llm_to_queue(
+                member_id,
+                cfg,
+                2,
+                messages,
+                queue,
+                self._token_budget["phase2"],
+                run_id=run_id,
+            )
 
     async def _chairman_decide(
         self,
@@ -621,9 +678,21 @@ class CouncilOrchestrator:
         token_budget_profile: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         self._token_budget = token_budget_for(token_budget_profile)
+        self._member_semaphore = asyncio.Semaphore(MAX_PARALLEL_MEMBERS)
         config = custom_config if custom_config else DEFAULT_MEMBER_CONFIG
         council_members = [k for k in config.keys() if k != "chairman"]
+        roster_capped = False
+        if len(council_members) > MAX_COUNCIL_MEMBERS:
+            logger.warning(
+                "roster_capped",
+                extra={"requested": len(council_members), "cap": MAX_COUNCIL_MEMBERS},
+            )
+            council_members = council_members[:MAX_COUNCIL_MEMBERS]
+            roster_capped = True
         chairman_cfg = config.get("chairman", DEFAULT_MEMBER_CONFIG["chairman"])
+        errored_members: set[str] = set()
+        spawned_tasks: list[asyncio.Task] = []
+        run_finalized = False
         run_id = run_id or metrics_store.start_run(
             "council",
             {
@@ -655,15 +724,18 @@ class CouncilOrchestrator:
             topic_context = await chunk_and_summarize(scraped_topic, chairman_cfg["model"])
             full_topic = f"{past_context}{skills_block}{topic_context}"
 
+            if roster_capped:
+                yield {"type": "warning", "message": f"Roster exceeded the {MAX_COUNCIL_MEMBERS}-member cap; using the first {MAX_COUNCIL_MEMBERS} members."}
+
             yield {"type": "phase_start", "phase": 1, "label": "Independent Analysis"}
             for member in council_members:
                 yield {"type": "member_thinking", "member": member, "meta": config[member]}
 
             queue = asyncio.Queue()
             for member in council_members:
-                asyncio.create_task(
+                spawned_tasks.append(asyncio.create_task(
                     self._member_analyze(member, config[member], full_topic, attachments, queue, run_id=run_id)
-                )
+                ))
 
             analyses = {}
             completed = 0
@@ -672,6 +744,8 @@ class CouncilOrchestrator:
                 if event["type"] == "member_done":
                     completed += 1
                     analyses[event["member"]] = event["full_text"]
+                    if event.get("errored"):
+                        errored_members.add(event["member"])
                 else:
                     yield event
 
@@ -704,9 +778,9 @@ class CouncilOrchestrator:
 
                     queue = asyncio.Queue()
                     for member in council_members:
-                        asyncio.create_task(
+                        spawned_tasks.append(asyncio.create_task(
                             self._member_review(member, config[member], config, analyses, queue, run_id=run_id)
-                        )
+                        ))
 
                     completed = 0
                     while completed < len(council_members):
@@ -714,6 +788,8 @@ class CouncilOrchestrator:
                         if event["type"] == "member_done":
                             completed += 1
                             reviews[event["member"]] = event["full_text"]
+                            if event.get("errored"):
+                                errored_members.add(event["member"])
                         else:
                             yield event
 
@@ -721,9 +797,9 @@ class CouncilOrchestrator:
             yield {"type": "member_thinking", "member": "chairman", "phase": 3, "meta": chairman_cfg}
 
             queue = asyncio.Queue()
-            asyncio.create_task(
+            spawned_tasks.append(asyncio.create_task(
                 self._chairman_decide(chairman_cfg, config, analyses, reviews, queue, run_id=run_id)
-            )
+            ))
 
             completed = 0
             chairman_decision_text = ""
@@ -732,6 +808,8 @@ class CouncilOrchestrator:
                 if event["type"] == "member_done":
                     completed += 1
                     chairman_decision_text = event["full_text"]
+                    if event.get("errored"):
+                        errored_members.add("chairman")
                 else:
                     yield event
 
@@ -766,18 +844,38 @@ class CouncilOrchestrator:
             )
             with contextlib.suppress(Exception):
                 task.add_done_callback(lambda t: t.exception())
-            metrics_store.finish_run(run_id, status="completed")
-            await asyncio.to_thread(run_store.finish_run, run_id, "completed")
+            final_status = "partial" if errored_members else "completed"
+            final_error = (
+                "Members failed: " + ", ".join(sorted(errored_members)) if errored_members else None
+            )
+            metrics_store.finish_run(run_id, status=final_status, error=final_error)
+            await asyncio.to_thread(run_store.finish_run, run_id, final_status, final_error)
+            run_finalized = True
             task = asyncio.create_task(
                 skill_registry.extract_skills(run_id, combined_topic, chairman_cfg["model"])
             )
             with contextlib.suppress(Exception):
                 task.add_done_callback(lambda t: t.exception())
-            yield {"type": "done"}
+            yield {"type": "done", "status": final_status, "errored_members": sorted(errored_members)}
         except Exception as exc:
             metrics_store.finish_run(run_id, status="failed", error=str(exc))
             await asyncio.to_thread(run_store.finish_run, run_id, "failed", str(exc))
+            run_finalized = True
             raise
+        finally:
+            # Cancel any still-running member/chairman tasks (e.g. on client
+            # disconnect, which throws GeneratorExit here) so they stop hitting
+            # providers and writing to a queue no one drains.
+            for t in spawned_tasks:
+                if not t.done():
+                    t.cancel()
+            # If the generator was closed before normal completion, the run is
+            # still marked "running" in both stores — finalize it as cancelled.
+            if not run_finalized:
+                with contextlib.suppress(Exception):
+                    metrics_store.finish_run(run_id, status="cancelled", error="Run interrupted before completion")
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(run_store.finish_run, run_id, "cancelled", "Run interrupted before completion")
 
     async def chat_with_member(
         self,
@@ -817,6 +915,7 @@ class CouncilOrchestrator:
                     messages=formatted_messages,
                     max_tokens=self._token_budget["chat"],
                     stream=True,
+                    timeout=LLM_TIMEOUT_S,
                     **litellm_kwargs_for_model(cfg["model"]),
                 )
                 async for chunk in resp:

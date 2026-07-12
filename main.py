@@ -249,11 +249,13 @@ async def council_stream(
         parsed_attachments.append(parsed)
 
     config_dict = None
+    config_parse_error = None
     if council_config:
         try:
             config_dict = json.loads(council_config)
-        except:
-            pass
+        except (json.JSONDecodeError, ValueError) as exc:
+            config_parse_error = str(exc)
+            logger.warning("council_config_parse_failed", extra={"error": config_parse_error})
 
     async def event_generator():
         with track_active_stream():
@@ -275,6 +277,8 @@ async def council_stream(
                     return
                 model_status = ensure_models_for_config(cfg, auto_pull=auto_pull_enabled())
                 yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                if config_parse_error:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'Invalid council_config JSON — using default roster. (' + config_parse_error + ')'})}\n\n"
                 yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
                 if not model_status["ready"]:
                     metrics_store.finish_run(
