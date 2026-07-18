@@ -849,6 +849,7 @@
       <div class="panel-empty">
         <div>Ready for a project brief.</div>
         <div class="helper-copy">Choose a preset, attach context, then run the council.</div>
+        <div class="helper-copy" id="hardwareReason" style="margin-top:6px;opacity:0.8;"></div>
       </div>
     </section>
   </main>
@@ -1133,7 +1134,7 @@
       const preset = demoCatalog.presets.find(item => item.id === presetId);
       if (!preset) return;
 
-      councilConfig = configFromPreset(preset);
+      councilConfig = fitModelsToHardware(configFromPreset(preset));
       document.getElementById('topicText').value = preset.topic || preset.topic_placeholder || '';
       syncToggles(preset);
       renderSeats();
@@ -1283,14 +1284,35 @@
       }
     }
 
+    let hardwareConfig = null;
+
+    // Presets define roles + personas; the hardware suggestion decides which
+    // model fills each role so a preset never over-subscribes local memory.
+    // On a 16GB box every seat collapses to one resident model (no swap); on a
+    // 32GB+ box the fitted roster is genuinely diverse.
+    function fitModelsToHardware(config) {
+      if (!hardwareConfig) return config;
+      for (const key of Object.keys(config)) {
+        if (hardwareConfig[key] && hardwareConfig[key].model) {
+          config[key].model = hardwareConfig[key].model;
+        }
+      }
+      return config;
+    }
+
     async function loadHardwareDefaults() {
       try {
         const resp = await fetch('/hardware/suggest');
         const data = await resp.json();
         if (data && data.config) {
+          hardwareConfig = data.config;
           councilConfig = data.config;
           renderSeats();
           refreshPreflight();
+          const badge = document.getElementById('hardwareReason');
+          if (badge && data.reason) {
+            badge.textContent = `Roster fitted to ${data.ram_gb}GB — ${data.reason}`;
+          }
         }
       } catch (e) {
         console.error('Failed to load hardware defaults', e);
