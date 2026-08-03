@@ -151,13 +151,20 @@ def _reject_if_overloaded() -> None:
 
 
 def _confine_to_project_root(candidate: str) -> str:
-    """Resolve a caller-supplied path and confine it to COUNCIL_PROJECT_ROOT
-    (default: cwd). Blocks arbitrary-filesystem reads via review-project /
-    code-graph on an exposed instance."""
-    root = os.path.abspath(os.getenv("COUNCIL_PROJECT_ROOT", os.getcwd()))
+    """Resolve a caller-supplied path. If COUNCIL_PROJECT_ROOT env var is set,
+    confines execution to that directory tree for security."""
     resolved = os.path.abspath(candidate)
-    if resolved != root and not resolved.startswith(root + os.sep):
-        raise HTTPException(status_code=403, detail="Path is outside the allowed project root (set COUNCIL_PROJECT_ROOT)")
+    if not os.path.exists(resolved):
+        raise HTTPException(status_code=400, detail=f"Path does not exist: {resolved}")
+
+    allowed_root = os.getenv("COUNCIL_PROJECT_ROOT")
+    if allowed_root:
+        root = os.path.abspath(allowed_root)
+        if resolved != root and not resolved.startswith(root + os.sep):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Path is outside the allowed COUNCIL_PROJECT_ROOT: {root}"
+            )
     return resolved
 
 
