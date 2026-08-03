@@ -27,6 +27,7 @@ from demo_catalog import get_demo_catalog, load_presets
 from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES, normalize_token_budget_profile
 from cloud_keys import extract_cloud_keys, scoped_cloud_keys
 from hardware_detect import get_default_council_config, get_hardware_suggestion
+from fable_exporter import export_to_fable_json
 from io_parser import format_attachments_for_prompt, ingest_folder, parse_uploaded_file
 from logging_utils import get_logger
 from memory_store import memory_store
@@ -501,6 +502,17 @@ async def ollama_bootstrap():
 @app.get("/council/memory")
 async def get_memory():
     return memory_store.get_graph_data()
+
+
+@app.get("/fable-graph/export")
+async def export_fable_graph(project_name: str = "local-llm-council"):
+    """Export council memory graph as a valid .fable.json corpus document."""
+    triples = await asyncio.to_thread(memory_store.all_triples)
+    formatted_triples = [
+        {"subject": t.subject, "predicate": t.predicate, "object": t.object, "confidence": t.confidence}
+        for t in triples
+    ]
+    return export_to_fable_json(formatted_triples, corpus_name=project_name)
 
 
 def _pick_top_files(graph_data: dict, k: int = 8) -> list[str]:

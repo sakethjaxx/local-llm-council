@@ -14,7 +14,9 @@ let selectedFiles = [];
 let demoCatalog = null;
 let preflightState = null;
 const CLOUD_KEY_STORAGE_KEY = 'llmCouncilCloudKeys';
+const THEME_STORAGE_KEY = 'llmCouncilTheme';
 let tokenBudgetProfile = 'balanced';
+
 const TOKEN_BUDGET_SUMMARIES = {
   economy: 'Economy profile: shorter answers for lower latency on smaller local models.',
   balanced: 'Balanced profile: standard council token caps.',
@@ -51,10 +53,7 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-marked.setOptions({
-  gfm: true,
-  breaks: true
-});
+marked.setOptions({ gfm: true, breaks: true });
 
 function sanitizeHtml(html) {
   if (window.DOMPurify) {
@@ -65,6 +64,91 @@ function sanitizeHtml(html) {
 
 function renderMarkdown(text) {
   return sanitizeHtml(marked.parse(text || ''));
+}
+
+// ── 1-CLICK RESET SESSION ──
+function resetSession() {
+  selectedFiles = [];
+  rawCardContents = {};
+  thinkingCards = {};
+  chatHistory = [];
+  ph2Section = null;
+  ph3Section = null;
+
+  document.getElementById('topicText').value = '';
+  document.getElementById('projectPathInput').value = '';
+  document.getElementById('projectScanInfo').textContent = '';
+  document.getElementById('presetSelect').value = '';
+  document.getElementById('presetDesc').textContent = 'Choose a preset to set models, starter topic text, and sample files.';
+  
+  renderSelectedFiles();
+  
+  const panel = document.getElementById('councilPanel');
+  panel.innerHTML = `
+    <div class="panel-empty">
+      <div>Ready for a project brief.</div>
+      <div class="helper-copy">Choose a preset, attach context, or enter a local project path to start.</div>
+      <div class="helper-copy" id="hardwareReason" style="margin-top:6px;opacity:0.8;"></div>
+    </div>
+  `;
+
+  const btn = document.getElementById('launchBtn');
+  btn.disabled = false;
+  btn.innerHTML = 'Run council';
+
+  showToast('Session reset cleanly.');
+}
+
+// ── THEME TOGGLE ──
+function toggleTheme() {
+  const isDark = document.body.getAttribute('data-theme') === 'dark';
+  const newTheme = isDark ? 'light' : 'dark';
+  if (newTheme === 'dark') {
+    document.body.setAttribute('data-theme', 'dark');
+  } else {
+    document.body.removeAttribute('data-theme');
+  }
+  localStorage.setItem(THEME_STORAGE_KEY, newTheme);
+  document.getElementById('themeBtn').textContent = newTheme === 'dark' ? '☀️ Theme' : '🌙 Theme';
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if (saved === 'dark' || (!saved && prefersDark)) {
+    document.body.setAttribute('data-theme', 'dark');
+    document.getElementById('themeBtn').textContent = '☀️ Theme';
+  }
+}
+
+// ── RESIZABLE SIDEBAR SPLITTER ──
+function initResizer() {
+  const resizer = document.getElementById('dragResizer');
+  if (!resizer) return;
+
+  let isDragging = false;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const newWidth = Math.min(Math.max(e.clientX, 280), 600);
+    document.documentElement.style.setProperty('--sidebar-width', `${newWidth}px`);
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
 }
 
 function showToast(message) {
@@ -79,7 +163,7 @@ function showToast(message) {
   toast.className = 'toast';
   toast.textContent = message || 'Something went wrong.';
   stack.appendChild(toast);
-  setTimeout(() => toast.remove(), 6500);
+  setTimeout(() => toast.remove(), 5500);
 }
 
 function renderLoadingState(panel, message) {
@@ -100,7 +184,6 @@ function loadCloudKeys() {
   try {
     return JSON.parse(localStorage.getItem(CLOUD_KEY_STORAGE_KEY) || '{}');
   } catch (e) {
-    console.error('Failed to parse stored cloud keys', e);
     return {};
   }
 }
@@ -117,15 +200,16 @@ function persistCloudKeys() {
 
 function hydrateCloudKeys() {
   const keys = loadCloudKeys();
-  document.getElementById('keyOpenAI').value = keys.openai || '';
-  document.getElementById('keyAnthropic').value = keys.anthropic || '';
-  document.getElementById('keyGemini').value = keys.gemini || '';
-  document.getElementById('keyGroq').value = keys.groq || '';
+  if (document.getElementById('keyOpenAI')) document.getElementById('keyOpenAI').value = keys.openai || '';
+  if (document.getElementById('keyAnthropic')) document.getElementById('keyAnthropic').value = keys.anthropic || '';
+  if (document.getElementById('keyGemini')) document.getElementById('keyGemini').value = keys.gemini || '';
+  if (document.getElementById('keyGroq')) document.getElementById('keyGroq').value = keys.groq || '';
 }
 
 function clearCloudKeys() {
   localStorage.removeItem(CLOUD_KEY_STORAGE_KEY);
   hydrateCloudKeys();
+  showToast('Cloud API keys cleared.');
 }
 
 function setTokenBudgetProfile(profile) {
@@ -177,30 +261,34 @@ function configFromPreset(preset) {
 }
 
 function renderPresets() {
-  const grid = document.getElementById('presetGrid');
-  if (!demoCatalog) {
-    grid.innerHTML = '<div class="status-line">Loading demo presets...</div>';
-    return;
-  }
+  const select = document.getElementById('presetSelect');
+  if (!demoCatalog || !select) return;
 
-  grid.innerHTML = demoCatalog.presets.map(preset => `
-    <div class="preset-card">
-      <div class="preset-title">${escapeHtml(preset.label)}</div>
-      <div class="preset-desc">${escapeHtml(preset.description)}</div>
-      <div class="inline-actions">
-        <button class="btn btn-small" onclick="applyDemoPreset('${preset.id}')">Use preset</button>
-        <button class="btn btn-small" onclick="loadPresetSamples('${preset.id}')">Load sample files</button>
-      </div>
-    </div>
-  `).join('');
+  select.innerHTML = '<option value="">Select a demo preset...</option>' +
+    demoCatalog.presets.map(preset => `
+      <option value="${preset.id}">${escapeHtml(preset.label)}</option>
+    `).join('');
+}
+
+async function onPresetSelected(presetId) {
+  if (!presetId || !demoCatalog) return;
+  const preset = demoCatalog.presets.find(item => item.id === presetId);
+  if (!preset) return;
+
+  document.getElementById('presetDesc').textContent = preset.description || '';
+  councilConfig = fitModelsToHardware(configFromPreset(preset));
+  document.getElementById('topicText').value = preset.topic || preset.topic_placeholder || '';
+  syncToggles(preset);
+  renderSeats();
+  
+  // Load preset sample files automatically
+  await loadPresetSamples(presetId);
+  refreshPreflight();
 }
 
 function renderSampleActions() {
   const box = document.getElementById('sampleActions');
-  if (!demoCatalog) {
-    box.innerHTML = '';
-    return;
-  }
+  if (!demoCatalog || !box) return;
   box.innerHTML = (demoCatalog.samples || []).map(sample => `
     <button class="btn btn-small" onclick="attachSample('${sample.id}')">${escapeHtml(sample.label)}</button>
   `).join('');
@@ -245,20 +333,9 @@ async function loadPresetSamples(presetId) {
   refreshPreflight();
 }
 
-async function applyDemoPreset(presetId) {
-  if (!demoCatalog) return;
-  const preset = demoCatalog.presets.find(item => item.id === presetId);
-  if (!preset) return;
-
-  councilConfig = fitModelsToHardware(configFromPreset(preset));
-  document.getElementById('topicText').value = preset.topic || preset.topic_placeholder || '';
-  syncToggles(preset);
-  renderSeats();
-  refreshPreflight();
-}
-
 async function refreshPreflight() {
   const box = document.getElementById('preflightBox');
+  if (!box) return;
   box.innerHTML = '<div class="status-line">Running preflight checks...</div>';
   try {
     const resp = await fetch('/ollama/check', {
@@ -277,26 +354,21 @@ async function refreshPreflight() {
     const missingHtml = (preflightState.missing || []).length
       ? `<div class="status-line status-bad">Missing models: ${escapeHtml(preflightState.missing.join(', '))}</div>`
       : `<div class="status-line status-good">All required local models are installed.</div>`;
-    const imageHtml = selectedFiles.some(file => file.type.startsWith('image/'))
-      ? `<div class="status-line ${preflightState.image_seats.length ? 'status-good' : 'status-warn'}">Image seats: ${escapeHtml((preflightState.image_seats || []).join(', ') || 'none')}</div>`
-      : '';
 
     box.innerHTML = `
       <div class="preset-title ${statusClass}">${preflightState.ready ? 'Demo roster ready' : 'Demo roster blocked'}</div>
-      <div class="status-line">Installed local models: ${escapeHtml((preflightState.installed || []).join(', ') || 'none detected')}</div>
       ${missingHtml}
-      ${imageHtml}
-      ${warningHtml || '<div class="status-line">No demo warnings for the current setup.</div>'}
+      ${warningHtml || '<div class="status-line">No demo warnings for current setup.</div>'}
     `;
   } catch (e) {
-    console.error('Failed to refresh preflight', e);
-    box.innerHTML = '<div class="status-line status-bad">Preflight failed. Check that the backend is running.</div>';
+    box.innerHTML = '<div class="status-line status-bad">Preflight failed. Backend check offline.</div>';
   }
 }
 
-// ── SEAT BUILDER UI ──
+// ── SEAT BUILDER UI (NON-OVERLAPPING DELETE BUTTON) ──
 function renderSeats() {
   const list = document.getElementById('seatList');
+  if (!list) return;
   list.innerHTML = '';
   for (const [id, seat] of Object.entries(councilConfig)) {
     const isChairman = id === 'chairman';
@@ -306,12 +378,12 @@ function renderSeats() {
       <div class="seat-header">
         <div class="seat-dot" style="background: ${seat.color}; color: ${seat.color}"></div>
         <div class="seat-title">${seat.icon} ${seat.label}</div>
-        <div class="seat-model">${seat.model.split('/').pop()}</div>
-        ${!isChairman ? `<div class="seat-remove" onclick="removeSeat('${id}')">✕</div>` : ''}
+        <div class="seat-model" title="${escapeHtml(seat.model)}">${escapeHtml(seat.model.split('/').pop())}</div>
+        ${!isChairman ? `<div class="seat-remove" onclick="removeSeat('${id}')" title="Remove seat">✕</div>` : ''}
       </div>
       <div class="seat-edit-fields">
-        <input type="text" value="${seat.model}" onchange="updateSeat('${id}', 'model', this.value)" placeholder="Model, e.g. ollama/qwen2.5:3b">
-        <input type="text" value="${seat.persona}" onchange="updateSeat('${id}', 'persona', this.value)" placeholder="System Persona Prompt">
+        <input type="text" value="${escapeHtml(seat.model)}" onchange="updateSeat('${id}', 'model', this.value)" placeholder="Model, e.g. ollama/qwen2.5:3b">
+        <input type="text" value="${escapeHtml(seat.persona)}" onchange="updateSeat('${id}', 'persona', this.value)" placeholder="System Persona Prompt">
       </div>
     `;
     list.appendChild(div);
@@ -369,15 +441,16 @@ function removeFile(index) {
 
 function renderSelectedFiles() {
   const fileList = document.getElementById('fileList');
+  if (!fileList) return;
   if (!selectedFiles.length) {
     fileList.innerHTML = '';
     return;
   }
   fileList.innerHTML = selectedFiles.map((file, i) => {
     const sizeKb = Math.max(1, Math.round(file.size / 1024));
-    return `<div style="display:flex;align-items:center;gap:8px;">
-      <span>${file.name} <span style="color:var(--warm)">(${sizeKb} KB)</span></span>
-      <button onclick="removeFile(${i})" style="background:none;border:none;color:var(--warm);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;" title="Remove">×</button>
+    return `<div style="display:flex;align-items:center;gap:6px;">
+      <span>${escapeHtml(file.name)} <span style="color:var(--warm)">(${sizeKb} KB)</span></span>
+      <button onclick="removeFile(${i})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0 2px;" title="Remove">✕</button>
     </div>`;
   }).join('');
 }
@@ -386,14 +459,11 @@ async function autoConfigureHardware() {
   try {
     const resp = await fetch('/hardware/suggest');
     const data = await resp.json();
-    
     alert(`Hardware Scan Complete.\n\nDetected RAM: ${data.ram_gb} GB\nHardware Tier: ${data.tier_name}\n\nUpdating Council Config to use optimized local Ollama models...`);
-    
     councilConfig = data.config;
     renderSeats();
     refreshPreflight();
   } catch (e) {
-    console.error(e);
     alert("Failed to auto-configure hardware. Is the backend running?");
   }
 }
@@ -424,26 +494,8 @@ async function loadHardwareDefaults() {
         badge.textContent = `Roster fitted to ${data.ram_gb}GB — ${data.reason}`;
       }
     }
-  } catch (e) {
-    console.error('Failed to load hardware defaults', e);
-  }
+  } catch (e) {}
 }
-
-renderSeats();
-hydrateCloudKeys();
-setTokenBudgetProfile('balanced');
-fetchDemoCatalog();
-loadHardwareDefaults();
-document.getElementById('attachmentInput').addEventListener('change', (event) => {
-  const incoming = Array.from(event.target.files || []);
-  const existingNames = new Set(selectedFiles.map(f => f.name));
-  for (const f of incoming) {
-    if (!existingNames.has(f.name)) selectedFiles.push(f);
-  }
-  event.target.value = '';
-  renderSelectedFiles();
-  refreshPreflight();
-});
 
 // ── COUNCIL EXECUTION ──
 async function launchCouncil() {
@@ -452,9 +504,6 @@ async function launchCouncil() {
   await refreshPreflight();
   if (!preflightState || !preflightState.ready) {
     return alert('Demo preflight failed. Install the missing models or switch to a preset that matches your local setup.');
-  }
-  if ((preflightState.warnings || []).some(item => item.includes('no seat is using a known image-capable local model'))) {
-    return alert('You selected image attachments without an image-capable seat. Switch to the Image Review preset or change one model before launching.');
   }
 
   const btn = document.getElementById('launchBtn');
@@ -475,15 +524,8 @@ async function launchCouncil() {
     formData.append('attachments', file);
   }
   
-  const swarmToggle = document.getElementById('dynamicSwarmToggle');
-  if (swarmToggle && swarmToggle.checked) {
-      formData.append('dynamic_swarm', true);
-  }
-  
-  const debateToggle = document.getElementById('deepDebateToggle');
-  if (debateToggle && debateToggle.checked) {
-      formData.append('deep_debate', true);
-  }
+  if (document.getElementById('dynamicSwarmToggle')?.checked) formData.append('dynamic_swarm', true);
+  if (document.getElementById('deepDebateToggle')?.checked) formData.append('deep_debate', true);
 
   try {
     const resp = await fetch('/council/stream', {
@@ -520,26 +562,18 @@ async function launchCouncil() {
         }
       }
     }
-    if (!sawDone) {
-      showToast('The stream ended before the council reported completion.');
-    }
   } catch (err) {
     showToast(err.message || 'SSE connection failed.');
     renderErrorState(panel, err.message);
   }
   
   btn.disabled = false;
-  btn.innerHTML = 'INITIALIZE COUNCIL';
-}
-
-function toggleProjectReview() {
-  const section = document.getElementById('projectReviewSection');
-  section.style.display = section.style.display === 'none' ? 'block' : 'none';
+  btn.innerHTML = 'Run council';
 }
 
 async function launchProjectReview() {
   const path = document.getElementById('projectPathInput').value.trim();
-  if (!path) return alert('Enter a project directory path.');
+  if (!path) return alert('Enter a project directory path (e.g. /Users/sakethjaggaiahgari/Desktop/Projects/Fable_graph).');
 
   const btn = document.getElementById('projectReviewBtn');
   const launchBtn = document.getElementById('launchBtn');
@@ -600,9 +634,6 @@ async function launchProjectReview() {
         }
       }
     }
-    if (!sawDone) {
-      showToast('The project review stream ended before completion.');
-    }
   } catch (err) {
     showToast(err.message || 'Project review connection failed.');
     renderErrorState(panel, err.message);
@@ -621,14 +652,6 @@ function handleEvent(ev, panel) {
       className: 'status-card',
       innerHTML: `<div class="preset-title status-bad">Runtime error</div><div class="status-line status-bad">${escapeHtml(message)}</div>`
     }));
-    return;
-  }
-
-  if (ev.type === 'warning') {
-    const warning = document.createElement('div');
-    warning.className = 'status-card';
-    warning.innerHTML = `<div class="preset-title status-warn">Runtime fallback</div><div class="status-line status-warn">${escapeHtml(ev.message || 'A warning occurred.')}</div>`;
-    panel.appendChild(warning);
     return;
   }
 
@@ -696,14 +719,14 @@ function handleEvent(ev, panel) {
       const body = existing.querySelector('.card-body');
       try {
         const data = JSON.parse(ev.full_text);
-        let riskColor = "var(--cyan)";
+        let riskColor = "var(--accent)";
         if (data.risk_score >= 8) riskColor = "var(--danger)";
-        else if (data.risk_score >= 5) riskColor = "var(--pink)";
+        else if (data.risk_score >= 5) riskColor = "var(--warm)";
 
         const riskScore = escapeHtml(data.risk_score ?? '');
         let html = `
           <h2>VERDICT: ${escapeHtml(data.verdict || '')}</h2>
-          <div style="font-size: 24px; color: ${riskColor}; font-family: 'Orbitron'; margin: 10px 0;">RISK SCORE: ${riskScore}/10</div>
+          <div style="font-size: 20px; color: ${riskColor}; font-weight:bold; margin: 8px 0;">RISK SCORE: ${riskScore}/10</div>
           <h3>Action Items:</h3>
           <ul>${(data.action_items || []).map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>
         `;
@@ -716,11 +739,6 @@ function handleEvent(ev, panel) {
     }
     return;
   }
-
-  if (ev.type === 'done') {
-    showDebatePanel(panel);
-    return;
-  }
 }
 
 function buildCard(member, meta, content, phase) {
@@ -728,7 +746,7 @@ function buildCard(member, meta, content, phase) {
   const card = document.createElement('div');
   card.className = isChairman ? 'council-card chairman-card' : 'council-card';
 
-  const color = meta.color || '#888';
+  const color = meta.color || 'var(--accent)';
   card.innerHTML = `
     <div class="card-header">
       <div class="card-icon" style="color:${color}">${meta.icon}</div>
@@ -740,126 +758,113 @@ function buildCard(member, meta, content, phase) {
   return card;
 }
 
-// ── DEBATE MODE & EXPORT ──
-function showDebatePanel(panel) {
-  const wrapper = document.createElement('div');
-  wrapper.innerHTML = `
-    <div class="debate-panel" style="display:block">
-      <div class="debate-header">
-        <span>> INTERACTIVE DEBATE MODE</span>
-        <button class="btn btn-small btn-solid" onclick="exportReport()">EXPORT REPORT</button>
-      </div>
-      <div class="chat-history" id="chatHistory"></div>
-      <div class="chat-input-row">
-        <select id="chatTarget" class="chat-select">
-          ${Object.entries(councilConfig).map(([id, cfg]) => `<option value="${id}">@${cfg.label}</option>`).join('')}
-        </select>
-        <input type="text" id="chatInput" placeholder="Ask a question..." onkeypress="if(event.key === 'Enter') sendChat()">
-        <button class="btn btn-solid" onclick="sendChat()" id="chatBtn">SEND</button>
-      </div>
-    </div>
-  `;
-  panel.appendChild(wrapper);
-  wrapper.scrollIntoView({ behavior: 'smooth', block: 'end' });
+// ── FABLE GRAPH EXPORT ──
+async function exportFableGraph() {
+  try {
+    const resp = await fetch('/fable-graph/export');
+    if (!resp.ok) return showToast('Failed to export Fable Graph.');
+    const data = await resp.json();
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `council_brain_${Date.now()}.fable.json`;
+    a.click();
+    showToast('Exported .fable.json corpus successfully!');
+  } catch (e) {
+    showToast('Failed to export Fable Graph JSON.');
+  }
 }
 
-async function sendChat() {
-  const input = document.getElementById('chatInput');
-  const targetId = document.getElementById('chatTarget').value;
-  const msg = input.value.trim();
-  if (!msg) return;
-
-  const historyDiv = document.getElementById('chatHistory');
+// ── MEMORY GRAPH & CODE GRAPH VISUALIZATION ──
+async function viewMemory() {
+  const modal = document.getElementById('memoryModal');
+  document.getElementById('modalTitle').textContent = 'Fable Knowledge Graph';
+  modal.style.display = 'flex';
   
-  chatHistory.push({ role: 'user', content: msg });
-  const uMsg = document.createElement('div');
-  uMsg.className = 'chat-msg chat-user';
-  uMsg.textContent = msg;
-  historyDiv.appendChild(uMsg);
-  input.value = '';
+  try {
+    const resp = await fetch('/council/memory');
+    const data = await resp.json();
 
-  const aMsg = document.createElement('div');
-  aMsg.className = 'chat-msg chat-agent';
-  aMsg.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
-  historyDiv.appendChild(aMsg);
-  historyDiv.scrollTop = historyDiv.scrollHeight;
+    // Map Fable typed edge colors
+    const edgeColors = {
+      supports: '#2f5d50',
+      contradicts: '#9f3d32',
+      decision_about: '#9c7a4d',
+      depends_on: '#2b5876',
+      causes: '#73552f'
+    };
 
-  document.getElementById('chatBtn').disabled = true;
+    const formattedEdges = (data.edges || []).map(edge => ({
+      ...edge,
+      color: { color: edgeColors[edge.label] || 'rgba(47, 93, 80, 0.4)', highlight: '#9c7a4d' }
+    }));
+    
+    const container = document.getElementById('memoryNetwork');
+    const options = {
+      nodes: {
+        shape: 'dot', size: 14,
+        font: { color: 'var(--text)', face: 'IBM Plex Mono', size: 12 },
+        color: { background: 'var(--accent-soft)', border: 'var(--accent)' }
+      },
+      edges: {
+        width: 2,
+        font: { color: 'var(--muted)', face: 'IBM Plex Mono', size: 10, align: 'horizontal' },
+        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        smooth: { type: 'continuous' }
+      },
+      physics: { barnesHut: { gravitationalConstant: -2800, centralGravity: 0.3 } }
+    };
+    
+    new vis.Network(container, { nodes: data.nodes, edges: formattedEdges }, options);
+  } catch (e) {
+    alert("Failed to load memory graph.");
+  }
+}
+
+function closeMemory() {
+  document.getElementById('memoryModal').style.display = 'none';
+}
+
+async function viewCodeGraph() {
+  const modal = document.getElementById('memoryModal');
+  const pathInput = document.getElementById('projectPathInput')?.value.trim();
+  const title = pathInput ? `Code Graph: ${pathInput.split('/').pop()}` : 'Project Code Graph';
+  document.getElementById('modalTitle').textContent = title;
+  modal.style.display = 'flex';
 
   try {
-    const resp = await fetch('/council/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...cloudKeyHeaders() },
-      body: JSON.stringify({
-        member_id: targetId,
-        messages: chatHistory,
-        council_config: councilConfig,
-        token_budget_profile: tokenBudgetProfile
-      })
-    });
+    const url = pathInput ? `/project/code-graph?path=${encodeURIComponent(pathInput)}` : '/project/code-graph';
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullReply = '';
-    aMsg.innerHTML = '';
+    const container = document.getElementById('memoryNetwork');
+    const options = {
+      nodes: {
+        shape: 'dot', size: 14,
+        font: { color: 'var(--text)', face: 'IBM Plex Mono', size: 11 },
+        color: { background: 'var(--accent-soft)', border: 'var(--accent)' }
+      },
+      edges: {
+        width: 1.5,
+        color: { color: 'rgba(47, 93, 80, 0.35)', highlight: '#9c7a4d' },
+        font: { color: 'var(--muted)', face: 'IBM Plex Mono', size: 10, align: 'horizontal' },
+        arrows: { to: { enabled: true, scaleFactor: 0.45 } },
+        smooth: { type: 'continuous' }
+      },
+      physics: { barnesHut: { gravitationalConstant: -2200, centralGravity: 0.28 } }
+    };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'chat_token') {
-              fullReply += ev.chunk;
-              aMsg.innerHTML = renderMarkdown(fullReply);
-              historyDiv.scrollTop = historyDiv.scrollHeight;
-            }
-          } catch {}
-        }
-      }
-    }
-    chatHistory.push({ role: 'assistant', content: fullReply });
-  } catch (err) {
-    aMsg.innerHTML = `<span style="color:red">Error: ${err.message}</span>`;
+    new vis.Network(container, { nodes: data.nodes, edges: data.edges }, options);
+  } catch (e) {
+    alert("Failed to load project code graph.");
   }
-  document.getElementById('chatBtn').disabled = false;
-}
-
-function exportReport() {
-  let md = "# Universal Council Report\n\n";
-  md += "## Topic\n" + document.getElementById('topicText').value + "\n\n";
-  
-  for (const [key, content] of Object.entries(rawCardContents)) {
-    const [member, phase] = key.split('-');
-    const meta = councilConfig[member];
-    const phaseName = phase == 1 ? "Analysis" : (phase == 2 ? "Review" : "Verdict");
-    md += `## ${meta.label} - Phase ${phase} (${phaseName})\n\n`;
-    md += content + "\n\n---\n\n";
-  }
-
-  if (chatHistory.length > 0) {
-    md += "## Interactive Debate\n\n";
-    chatHistory.forEach(msg => {
-      md += `**${msg.role.toUpperCase()}**: ${msg.content}\n\n`;
-    });
-  }
-
-  const blob = new Blob([md], { type: 'text/markdown' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `council_report_${Date.now()}.md`;
-  a.click();
 }
 
 async function openReplayModal() {
-  const modal = document.getElementById('replayModal');
-  modal.style.display = 'flex';
+  document.getElementById('replayModal').style.display = 'flex';
   await loadReplayRuns();
 }
 
@@ -895,7 +900,6 @@ async function loadReplayRuns() {
 
     await loadReplayRunDetail(runs[0].run_id);
   } catch (e) {
-    console.error('Failed to load replay runs', e);
     list.innerHTML = '<div class="replay-empty">Failed to load persisted runs.</div>';
   }
 }
@@ -933,21 +937,10 @@ async function loadReplayRunDetail(runId) {
     const phases = run.phases || [];
     const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
     const finished = run.finished_at ? new Date(run.finished_at * 1000).toLocaleString() : 'in progress';
-    const chairmanPhase = phases.find(phase => phase.phase === 3 && phase.member_id === 'chairman');
-    let verdictSummary = '';
-    if (chairmanPhase) {
-      try {
-        const chairmanJson = JSON.parse(chairmanPhase.output || '{}');
-        verdictSummary = `<div class="status-card"><div class="preset-title">Chairman verdict</div><div class="status-line">${escapeHtml(chairmanJson.verdict || 'Unavailable')}</div></div>`;
-      } catch (e) {
-        verdictSummary = '';
-      }
-    }
 
     detail.innerHTML = `
       <div class="preset-title">${escapeHtml(run.topic || 'Untitled run')}</div>
-      <div class="replay-run-meta" style="margin-top:8px;">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}<br>finished: ${escapeHtml(finished)}</div>
-      ${verdictSummary}
+      <div class="replay-run-meta" style="margin-top:6px;">run_id: ${escapeHtml(run.run_id)} • status: ${escapeHtml(run.status)} • started: ${escapeHtml(started)}</div>
       ${phases.map(phase => {
         const seat = roster[phase.member_id] || {};
         const label = seat.label || phase.member_id;
@@ -959,87 +952,32 @@ async function loadReplayRunDetail(runId) {
               <div class="replay-member" style="color:${escapeHtml(color)}">${escapeHtml(icon)} ${escapeHtml(label)}</div>
               <div class="replay-phase-meta">phase ${escapeHtml(String(phase.phase))} • ${escapeHtml(phase.member_id)}</div>
             </div>
-            <div class="replay-phase-meta">finish_reason: ${escapeHtml(String(phase.finish_reason || 'n/a'))} • attempt: ${escapeHtml(String(phase.attempt_number || 1))}</div>
-            <div class="card-body" style="display:block; margin-top:10px;">${formatReplayPhaseOutput(phase)}</div>
+            <div class="card-body" style="display:block; margin-top:8px;">${formatReplayPhaseOutput(phase)}</div>
           </div>
         `;
       }).join('') || '<div class="replay-empty">No phase outputs stored for this run.</div>'}
     `;
   } catch (e) {
-    console.error('Failed to load replay detail', e);
     detail.innerHTML = '<div class="replay-empty">Failed to load run detail.</div>';
   }
 }
 
-// ── MEMORY GRAPH VISUALIZATION ──
-async function viewMemory() {
-  const modal = document.getElementById('memoryModal');
-  document.getElementById('modalTitle').textContent = 'Knowledge graph';
-  modal.style.display = 'flex';
-  
-  try {
-    const resp = await fetch('/council/memory');
-    const data = await resp.json();
-    
-    const container = document.getElementById('memoryNetwork');
-    const options = {
-      nodes: {
-        shape: 'dot', size: 16,
-        font: { color: '#E8E8EE', face: 'Rajdhani', size: 14 },
-        color: { background: '#00f0ff', border: '#ff00ff' },
-        shadow: true
-      },
-      edges: {
-        width: 2,
-        color: { color: 'rgba(0, 240, 255, 0.4)', highlight: '#ff00ff' },
-        font: { color: '#8A8A9E', face: 'Fira Code', size: 11, align: 'horizontal' },
-        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-        smooth: { type: 'continuous' }
-      },
-      physics: { barnesHut: { gravitationalConstant: -3000, centralGravity: 0.3 } }
-    };
-    
-    new vis.Network(container, data, options);
-  } catch (e) {
-    console.error(e);
-    alert("Failed to load memory graph.");
+// ── INITIALIZATION ──
+initTheme();
+initResizer();
+renderSeats();
+hydrateCloudKeys();
+setTokenBudgetProfile('balanced');
+fetchDemoCatalog();
+loadHardwareDefaults();
+
+document.getElementById('attachmentInput').addEventListener('change', (event) => {
+  const incoming = Array.from(event.target.files || []);
+  const existingNames = new Set(selectedFiles.map(f => f.name));
+  for (const f of incoming) {
+    if (!existingNames.has(f.name)) selectedFiles.push(f);
   }
-}
-
-function closeMemory() {
-  document.getElementById('memoryModal').style.display = 'none';
-}
-
-async function viewCodeGraph() {
-  const modal = document.getElementById('memoryModal');
-  document.getElementById('modalTitle').textContent = 'Project code graph';
-  modal.style.display = 'flex';
-
-  try {
-    const resp = await fetch('/project/code-graph');
-    const data = await resp.json();
-
-    const container = document.getElementById('memoryNetwork');
-    const options = {
-      nodes: {
-        shape: 'dot',
-        size: 14,
-        font: { color: '#1f2823', face: 'IBM Plex Mono', size: 12 },
-        color: { background: '#dbe5df', border: '#2f5d50' }
-      },
-      edges: {
-        width: 1.5,
-        color: { color: 'rgba(47, 93, 80, 0.35)', highlight: '#9c7a4d' },
-        font: { color: '#6b756f', face: 'IBM Plex Mono', size: 10, align: 'horizontal' },
-        arrows: { to: { enabled: true, scaleFactor: 0.45 } },
-        smooth: { type: 'continuous' }
-      },
-      physics: { barnesHut: { gravitationalConstant: -2200, centralGravity: 0.28 } }
-    };
-
-    new vis.Network(container, { nodes: data.nodes, edges: data.edges }, options);
-  } catch (e) {
-    console.error(e);
-    alert("Failed to load code graph.");
-  }
-}
+  event.target.value = '';
+  renderSelectedFiles();
+  refreshPreflight();
+});

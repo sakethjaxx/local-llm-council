@@ -37,7 +37,12 @@ async def main():
         orchestrator = CouncilOrchestrator()
         chairman_output = ""
         
-        async for event in orchestrator.run(full_topic, None, None, config, deep_debate=False):
+        async for event in orchestrator.run(
+            topic_text=full_topic,
+            attachments=None,
+            custom_config=config,
+            deep_debate=False
+        ):
             if event["type"] == "member_done" and event["member"] == "chairman":
                 chairman_output = event["full_text"]
             elif event["type"] == "token":

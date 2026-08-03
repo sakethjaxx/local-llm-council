@@ -21,9 +21,12 @@
     <div class="logo-mark">LLM COUNCIL</div>
     <div class="title-group">
       <h1>Project Review Council</h1>
-      <p>Local multi-model analysis with memory, metrics, and hardware-aware routing.</p>
+      <p>Local multi-model synthesis engine with memory, metrics, and hardware routing.</p>
     </div>
     <div class="header-actions">
+      <button class="btn btn-small btn-solid" onclick="resetSession()" title="Clear inputs, files, and cards to start fresh">🔄 Reset Session</button>
+      <button class="btn btn-small" onclick="toggleTheme()" id="themeBtn" title="Toggle Light/Dark Theme">🌙 Theme</button>
+      <button class="btn btn-small" onclick="exportFableGraph()" title="Export memory graph as .fable.json format">📥 Export Fable JSON</button>
       <button class="btn btn-small" onclick="openReplayModal()">Replay runs</button>
       <button class="btn btn-small" onclick="viewCodeGraph()">View code graph</button>
       <button class="btn btn-small" onclick="viewMemory()">View memory graph</button>
@@ -33,124 +36,127 @@
   <main>
     <!-- LEFT PANEL: CONFIG -->
     <aside class="config-panel">
-      <div>
-        <div class="section-title">0. Demo Mode</div>
-        <div class="preset-grid" id="presetGrid"></div>
-        <div class="helper-copy">Presets are the stable paths for a product demo. They set models, toggles, starter topic text, and recommended sample files.</div>
-      </div>
-
+      <!-- 1. DEMO PRESETS & PREFLIGHT -->
       <div>
         <div class="section-title">
-          Demo Preflight
+          1. Demo Presets &amp; Preflight
           <button class="btn btn-small" onclick="refreshPreflight()">Refresh checks</button>
         </div>
-        <div class="status-card" id="preflightBox">
+        <select id="presetSelect" onchange="onPresetSelected(this.value)">
+          <option value="">Select a demo preset...</option>
+        </select>
+        <div class="helper-copy" id="presetDesc">Choose a preset to set models, starter topic text, and sample files.</div>
+        <div class="status-card" id="preflightBox" style="margin-top:10px;">
           <div class="status-line">Checking local models and input compatibility...</div>
         </div>
       </div>
-      
+
+      <!-- 2. REVIEW LOCAL PROJECT (TOP POSITIONED) -->
       <div>
-        <div class="section-title">1. Context / Topic</div>
-        <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or a focused review request..."></textarea>
-        <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos. Text-like files are folded into the council prompt; image files are sent as visual inputs when the model supports them.</div>
-        <input type="file" id="attachmentInput" aria-label="Attach files for council review" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*">
+        <div class="section-title">2. Review Local Project</div>
+        <div style="display:flex; gap: 6px; align-items:center;">
+          <input type="text" id="projectPathInput" placeholder="/Users/you/projects/Fable_graph" style="flex:1;">
+          <button class="btn btn-solid btn-small" id="projectReviewBtn" onclick="launchProjectReview()" style="white-space:nowrap;">Scan &amp; Review</button>
+        </div>
+        <div id="projectScanInfo" style="margin-top: 6px; font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
+      </div>
+
+      <!-- 3. CONTEXT & ATTACHMENTS -->
+      <div>
+        <div class="section-title">3. Context / Topic</div>
+        <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or review request..."></textarea>
+        <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos.</div>
+        <input type="file" id="attachmentInput" aria-label="Attach files for council review" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.js,.ts,.html,.css,.yaml,.yml,image/*" style="margin-top:6px;">
         <div class="file-list" id="fileList"></div>
         <div class="inline-actions" id="sampleActions"></div>
       </div>
 
+      <!-- 4. MODEL & TOKEN PROFILE -->
       <div>
-        <div class="section-title">2. Model Profile</div>
+        <div class="section-title">4. Model &amp; Token Profile</div>
         <div class="inline-actions">
-          <button class="btn btn-small" onclick="applyModelProfile('turbo')">Turbo / low latency</button>
+          <button class="btn btn-small" onclick="applyModelProfile('turbo')">Turbo</button>
           <button class="btn btn-small" onclick="applyModelProfile('balanced')">Balanced</button>
           <button class="btn btn-small" onclick="applyModelProfile('quality')">Quality</button>
-        </div>
-        <div class="helper-copy">Profiles swap the council between smaller and larger local Ollama models. You can still override any seat manually.</div>
-      </div>
-
-      <div>
-        <div class="section-title">2.7 Token Budget</div>
-        <div class="inline-actions">
+          <span style="border-left:1px solid var(--border); padding-left:6px;"></span>
           <button class="btn btn-small" onclick="setTokenBudgetProfile('economy')">Economy</button>
-          <button class="btn btn-small" onclick="setTokenBudgetProfile('balanced')">Balanced</button>
-          <button class="btn btn-small" onclick="setTokenBudgetProfile('performance')">Performance</button>
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('balanced')">Balanced BP</button>
+          <button class="btn btn-small" onclick="setTokenBudgetProfile('performance')">Perf BP</button>
         </div>
         <div class="helper-copy" id="tokenBudgetSummary">Balanced profile: standard council token caps.</div>
       </div>
 
+      <!-- 5. COUNCIL ROSTER -->
       <div>
         <div class="section-title">
-          2.6 Cloud Keys
-          <button class="btn btn-small" onclick="clearCloudKeys()">Clear keys</button>
-        </div>
-        <div class="cloud-key-grid">
-          <div class="cloud-key-row">
-            <div class="cloud-key-label">OpenAI</div>
-            <input type="password" id="keyOpenAI" placeholder="sk-..." oninput="persistCloudKeys()">
-          </div>
-          <div class="cloud-key-row">
-            <div class="cloud-key-label">Anthropic</div>
-            <input type="password" id="keyAnthropic" placeholder="sk-ant-..." oninput="persistCloudKeys()">
-          </div>
-          <div class="cloud-key-row">
-            <div class="cloud-key-label">Gemini</div>
-            <input type="password" id="keyGemini" placeholder="AIza..." oninput="persistCloudKeys()">
-          </div>
-          <div class="cloud-key-row">
-            <div class="cloud-key-label">Groq</div>
-            <input type="password" id="keyGroq" placeholder="gsk_..." oninput="persistCloudKeys()">
-          </div>
-        </div>
-        <div class="helper-copy">Stored in this browser only. Keys are sent as request headers and are not written to server-side disk state.</div>
-      </div>
-
-      <div>
-        <div class="section-title">
-          3. Council Roster 
+          5. Council Roster 
           <div>
-            <label style="color:var(--muted); margin-right: 15px; font-size: 13px;">
-              <input type="checkbox" id="dynamicSwarmToggle"> 🌀 Dynamic Swarm
-            </label>
-            <label style="color:var(--muted); margin-right: 15px; font-size: 13px;">
-              <input type="checkbox" id="deepDebateToggle"> ⚖️ Deep Debate (Slower)
-            </label>
-            <button class="btn btn-small" onclick="autoConfigureHardware()" style="margin-right: 8px;">Auto-tune hardware</button>
+            <button class="btn btn-small" onclick="autoConfigureHardware()">Auto-tune</button>
             <button class="btn btn-small" onclick="addSeat()">Add seat</button>
           </div>
+        </div>
+        <div style="display:flex; gap:12px; margin-bottom:10px;">
+          <label style="color:var(--muted); font-size: 12px; cursor:pointer;">
+            <input type="checkbox" id="dynamicSwarmToggle"> 🌀 Dynamic Swarm
+          </label>
+          <label style="color:var(--muted); font-size: 12px; cursor:pointer;">
+            <input type="checkbox" id="deepDebateToggle"> ⚖️ Deep Debate
+          </label>
         </div>
         <div class="seat-list" id="seatList">
           <!-- Populated via JS -->
         </div>
       </div>
 
-      <button class="btn btn-solid" id="launchBtn" onclick="launchCouncil()" style="margin-top: 20px; font-size: 16px; padding: 15px;">
+      <button class="btn btn-solid" id="launchBtn" onclick="launchCouncil()" style="margin-top: 10px; font-size: 15px; padding: 12px;">
         Run council
       </button>
 
-      <div style="margin-top: 12px;">
-        <button class="btn btn-small" onclick="toggleProjectReview()" id="projectReviewToggle">📁 Review Local Project</button>
-        <div id="projectReviewSection" style="display:none; margin-top: 10px; padding: 14px; background: rgba(255,255,255,0.5); border: 1px solid var(--border); border-radius: 12px;">
-          <div class="helper-copy" style="margin-bottom: 8px;">Enter the absolute path to a local project directory. The council will scan its files, pick the most connected ones, and run a full review.</div>
-          <div style="display:flex; gap: 8px; align-items:center;">
-            <input type="text" id="projectPathInput" placeholder="/Users/you/projects/my-app" style="flex:1; padding: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); outline: none;">
-            <button class="btn btn-solid" id="projectReviewBtn" onclick="launchProjectReview()" style="white-space:nowrap;">Scan &amp; Review</button>
+      <!-- 6. CLOUD API KEYS (OPTIONAL ACCORDION) -->
+      <details class="accordion" style="margin-top:10px;">
+        <summary>
+          <span>6. Cloud API Keys (Optional)</span>
+          <button class="btn btn-small" onclick="event.preventDefault(); clearCloudKeys();" style="margin-left:auto; margin-right:8px;">Clear</button>
+        </summary>
+        <div class="accordion-content">
+          <div class="cloud-key-grid">
+            <div class="cloud-key-row">
+              <div class="cloud-key-label">OpenAI</div>
+              <input type="password" id="keyOpenAI" placeholder="sk-..." oninput="persistCloudKeys()">
+            </div>
+            <div class="cloud-key-row">
+              <div class="cloud-key-label">Anthropic</div>
+              <input type="password" id="keyAnthropic" placeholder="sk-ant-..." oninput="persistCloudKeys()">
+            </div>
+            <div class="cloud-key-row">
+              <div class="cloud-key-label">Gemini</div>
+              <input type="password" id="keyGemini" placeholder="AIza..." oninput="persistCloudKeys()">
+            </div>
+            <div class="cloud-key-row">
+              <div class="cloud-key-label">Groq</div>
+              <input type="password" id="keyGroq" placeholder="gsk_..." oninput="persistCloudKeys()">
+            </div>
           </div>
-          <div id="projectScanInfo" style="margin-top: 8px; font-size: 12px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
+          <div class="helper-copy">Stored in this browser only. Sent as headers, never saved to disk.</div>
         </div>
-      </div>
+      </details>
 
     </aside>
+
+    <!-- RESIZABLE SPLITTER -->
+    <div class="resizer" id="dragResizer" title="Drag left/right to resize sidebar"></div>
 
     <!-- RIGHT PANEL: OUTPUT -->
     <section class="council-panel" id="councilPanel">
       <div class="panel-empty">
         <div>Ready for a project brief.</div>
-        <div class="helper-copy">Choose a preset, attach context, then run the council.</div>
+        <div class="helper-copy">Choose a preset, attach context, or enter a local project path to start.</div>
         <div class="helper-copy" id="hardwareReason" style="margin-top:6px;opacity:0.8;"></div>
       </div>
     </section>
   </main>
 
+  <!-- MODALS -->
   <div class="modal-overlay" id="memoryModal">
     <div class="modal-content">
       <div class="modal-header">

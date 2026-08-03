@@ -155,6 +155,16 @@ def _usage_to_dict(usage):
     return None
 
 
+def _regex_extract_list(key: str, raw: str) -> list[str]:
+    pattern = r'(?:["\']?' + re.escape(key) + r'["\']?)\s*:\s*\[([^\]]*)\]'
+    match = re.search(pattern, raw, re.IGNORECASE)
+    if not match:
+        return []
+    items_content = match.group(1)
+    items = re.findall(r'["\']([^"\']*)["\']', items_content)
+    return [item.strip() for item in items if item.strip()]
+
+
 def parse_chairman_response(raw: str) -> dict:
     def normalize(result: dict, tier: str) -> dict:
         consensus = result.get("consensus")
@@ -195,21 +205,24 @@ def parse_chairman_response(raw: str) -> dict:
     except Exception:
         pass
 
-    verdict_match = re.search(r'"verdict"\s*:\s*"([^"]+)"', raw)
-    risk_match = re.search(r'"risk_score"\s*:\s*(\d+(?:\.\d+)?)', raw)
+    verdict_match = re.search(r'(?:["\']?verdict["\']?)\s*:\s*["\']([^"\']+)["\']', raw, re.IGNORECASE)
+    risk_match = re.search(r'(?:["\']?risk_score["\']?)\s*:\s*(\d+(?:\.\d+)?)', raw, re.IGNORECASE)
+    confidence_match = re.search(r'(?:["\']?confidence["\']?)\s*:\s*(\d+(?:\.\d+)?)', raw, re.IGNORECASE)
     if verdict_match or risk_match:
         return {
             "verdict": verdict_match.group(1) if verdict_match else "parse_failed",
             "risk_score": float(risk_match.group(1)) if risk_match else -1,
-            "action_items": [],
-            "consensus": [],
-            "disputes": [],
+            "confidence": int(float(confidence_match.group(1))) if confidence_match else -1,
+            "action_items": _regex_extract_list("action_items", raw),
+            "consensus": _regex_extract_list("consensus", raw),
+            "disputes": _regex_extract_list("disputes", raw),
             "_parse_tier": "regex_extracted",
         }
 
     return {
         "verdict": "parse_failed",
         "risk_score": -1,
+        "confidence": -1,
         "action_items": [],
         "consensus": [],
         "disputes": [],

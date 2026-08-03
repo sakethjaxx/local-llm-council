@@ -101,6 +101,16 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         legacy = parse_chairman_response('{"verdict":"ship","risk_score":2,"action_items":[]}')
         self.assertEqual(legacy["confidence"], -1)
 
+    def test_parse_chairman_response_regex_robustness(self):
+        raw = "verdict: 'revise', risk_score: 8, confidence: 6, action_items: ['fix bugs', 'run tests'], consensus: [], disputes: ['none']"
+        result = parse_chairman_response(raw)
+        self.assertEqual(result["verdict"], "revise")
+        self.assertEqual(result["risk_score"], 8)
+        self.assertEqual(result["confidence"], 6)
+        self.assertEqual(result["action_items"], ["fix bugs", "run tests"])
+        self.assertEqual(result["disputes"], ["none"])
+        self.assertEqual(result["_parse_tier"], "regex_extracted")
+
     def test_specificity_score_parse_failed_returns_sentinel(self):
         result = parse_chairman_response("not json at all")
 
