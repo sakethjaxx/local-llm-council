@@ -154,9 +154,6 @@ def _confine_to_project_root(candidate: str) -> str:
     """Resolve a caller-supplied path. If COUNCIL_PROJECT_ROOT env var is set,
     confines execution to that directory tree for security."""
     resolved = os.path.abspath(candidate)
-    if not os.path.exists(resolved):
-        raise HTTPException(status_code=400, detail=f"Path does not exist: {resolved}")
-
     allowed_root = os.getenv("COUNCIL_PROJECT_ROOT")
     if allowed_root:
         root = os.path.abspath(allowed_root)
