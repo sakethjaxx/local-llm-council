@@ -46,17 +46,21 @@
           <option value="">Select a demo preset...</option>
         </select>
         <div class="helper-copy" id="presetDesc">Choose a preset to set models, starter topic text, and sample files.</div>
-        <div class="status-card" id="preflightBox" style="margin-top:10px;">
+        <div class="status-card" id="preflightBox" style="margin-top:8px;">
           <div class="status-line">Checking local models and input compatibility...</div>
         </div>
       </div>
 
       <!-- 2. REVIEW LOCAL PROJECT (TOP POSITIONED) -->
       <div>
-        <div class="section-title">2. Review Local Project</div>
-        <div style="display:flex; gap: 6px; align-items:center;">
-          <input type="text" id="projectPathInput" placeholder="/Users/you/projects/Fable_graph" style="flex:1;">
-          <button class="btn btn-solid btn-small" id="projectReviewBtn" onclick="launchProjectReview()" style="white-space:nowrap;">Scan &amp; Review</button>
+        <div class="section-title">
+          2. Review Local Project
+          <button class="btn btn-small" onclick="useCurrentProject()">Use Fable_graph</button>
+        </div>
+        <input type="text" id="projectPathInput" placeholder="/Users/sakethjaggaiahgari/Desktop/Projects/Fable_graph">
+        <div class="inline-actions" style="margin-top:6px;">
+          <button class="btn btn-solid btn-small" id="projectReviewBtn" onclick="launchProjectReview()">Scan &amp; Review</button>
+          <button class="btn btn-small" onclick="bulkIngestFolder()" title="Ingest all files into attachments">Bulk Ingest Files</button>
         </div>
         <div id="projectScanInfo" style="margin-top: 6px; font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;"></div>
       </div>
@@ -95,11 +99,11 @@
             <button class="btn btn-small" onclick="addSeat()">Add seat</button>
           </div>
         </div>
-        <div style="display:flex; gap:12px; margin-bottom:10px;">
-          <label style="color:var(--muted); font-size: 12px; cursor:pointer;">
+        <div style="display:flex; gap:12px; margin-bottom:8px;">
+          <label style="color:var(--muted); font-size: 11px; cursor:pointer;">
             <input type="checkbox" id="dynamicSwarmToggle"> 🌀 Dynamic Swarm
           </label>
-          <label style="color:var(--muted); font-size: 12px; cursor:pointer;">
+          <label style="color:var(--muted); font-size: 11px; cursor:pointer;">
             <input type="checkbox" id="deepDebateToggle"> ⚖️ Deep Debate
           </label>
         </div>
@@ -108,15 +112,15 @@
         </div>
       </div>
 
-      <button class="btn btn-solid" id="launchBtn" onclick="launchCouncil()" style="margin-top: 10px; font-size: 15px; padding: 12px;">
+      <button class="btn btn-solid" id="launchBtn" onclick="launchCouncil()" style="margin-top: 6px; font-size: 14px; padding: 11px;">
         Run council
       </button>
 
       <!-- 6. CLOUD API KEYS (OPTIONAL ACCORDION) -->
-      <details class="accordion" style="margin-top:10px;">
+      <details class="accordion" style="margin-top:8px;">
         <summary>
           <span>6. Cloud API Keys (Optional)</span>
-          <button class="btn btn-small" onclick="event.preventDefault(); clearCloudKeys();" style="margin-left:auto; margin-right:8px;">Clear</button>
+          <button class="btn btn-small" onclick="event.preventDefault(); clearCloudKeys();" style="margin-left:auto; margin-right:6px;">Clear</button>
         </summary>
         <div class="accordion-content">
           <div class="cloud-key-grid">

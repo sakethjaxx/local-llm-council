@@ -45,7 +45,7 @@ const MODEL_PROFILES = {
 };
 
 function escapeHtml(value) {
-  return String(value)
+  return String(value || '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -101,15 +101,18 @@ function resetSession() {
 
 // ── THEME TOGGLE ──
 function toggleTheme() {
-  const isDark = document.body.getAttribute('data-theme') === 'dark';
-  const newTheme = isDark ? 'light' : 'dark';
+  const currentTheme = document.body.getAttribute('data-theme');
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  
   if (newTheme === 'dark') {
     document.body.setAttribute('data-theme', 'dark');
   } else {
     document.body.removeAttribute('data-theme');
   }
   localStorage.setItem(THEME_STORAGE_KEY, newTheme);
-  document.getElementById('themeBtn').textContent = newTheme === 'dark' ? '☀️ Theme' : '🌙 Theme';
+  
+  const themeBtn = document.getElementById('themeBtn');
+  if (themeBtn) themeBtn.textContent = newTheme === 'dark' ? '☀️ Theme' : '🌙 Theme';
 }
 
 function initTheme() {
@@ -117,7 +120,52 @@ function initTheme() {
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   if (saved === 'dark' || (!saved && prefersDark)) {
     document.body.setAttribute('data-theme', 'dark');
-    document.getElementById('themeBtn').textContent = '☀️ Theme';
+    const themeBtn = document.getElementById('themeBtn');
+    if (themeBtn) themeBtn.textContent = '☀️ Theme';
+  }
+}
+
+// ── LOCAL PROJECT HELPER FUNCTIONS ──
+function useCurrentProject() {
+  const input = document.getElementById('projectPathInput');
+  if (input) input.value = '/Users/sakethjaggaiahgari/Desktop/Projects/Fable_graph';
+  showToast('Set project path to Fable_graph.');
+}
+
+async function bulkIngestFolder() {
+  const path = document.getElementById('projectPathInput')?.value.trim();
+  if (!path) return alert('Enter a local folder path to ingest.');
+  
+  const infoDiv = document.getElementById('projectScanInfo');
+  if (infoDiv) infoDiv.textContent = 'Bulk ingesting folder files...';
+  
+  try {
+    const resp = await fetch('/ingest/folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_path: path, max_files: 50 })
+    });
+    
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      alert(`Ingest failed: ${err.detail || 'Unknown error'}`);
+      if (infoDiv) infoDiv.textContent = '';
+      return;
+    }
+    
+    const data = await resp.json();
+    if (infoDiv) infoDiv.textContent = `Ingested ${data.file_count} project files into prompt context.`;
+    
+    // Auto populate topic text if empty
+    const topic = document.getElementById('topicText');
+    if (topic && !topic.value.trim() && data.formatted_prompt_text) {
+      topic.value = `[Review Request for ${path.split('/').pop()}]\n\n${data.formatted_prompt_text}`;
+    }
+    
+    showToast(`Bulk ingested ${data.file_count} files successfully!`);
+  } catch (e) {
+    alert(`Folder ingest error: ${e.message}`);
+    if (infoDiv) infoDiv.textContent = '';
   }
 }
 
@@ -137,7 +185,7 @@ function initResizer() {
 
   document.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
-    const newWidth = Math.min(Math.max(e.clientX, 280), 600);
+    const newWidth = Math.min(Math.max(e.clientX, 280), 650);
     document.documentElement.style.setProperty('--sidebar-width', `${newWidth}px`);
   });
 
@@ -281,7 +329,6 @@ async function onPresetSelected(presetId) {
   syncToggles(preset);
   renderSeats();
   
-  // Load preset sample files automatically
   await loadPresetSamples(presetId);
   refreshPreflight();
 }
@@ -353,7 +400,7 @@ async function refreshPreflight() {
     const warningHtml = warnings.map(item => `<div class="status-line status-warn">${escapeHtml(item)}</div>`).join('');
     const missingHtml = (preflightState.missing || []).length
       ? `<div class="status-line status-bad">Missing models: ${escapeHtml(preflightState.missing.join(', '))}</div>`
-      : `<div class="status-line status-good">All required local models are installed.</div>`;
+      : `<div class="status-line status-good">All required local models installed.</div>`;
 
     box.innerHTML = `
       <div class="preset-title ${statusClass}">${preflightState.ready ? 'Demo roster ready' : 'Demo roster blocked'}</div>
@@ -365,7 +412,7 @@ async function refreshPreflight() {
   }
 }
 
-// ── SEAT BUILDER UI (NON-OVERLAPPING DELETE BUTTON) ──
+// ── SEAT BUILDER UI (STRICT NON-OVERLAPPING DELETE BUTTON) ──
 function renderSeats() {
   const list = document.getElementById('seatList');
   if (!list) return;
@@ -544,7 +591,6 @@ async function launchCouncil() {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let sawDone = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -556,7 +602,6 @@ async function launchCouncil() {
         if (line.startsWith('data: ')) {
           try {
             const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'done') sawDone = true;
             handleEvent(ev, panel);
           } catch {}
         }
@@ -583,11 +628,11 @@ async function launchProjectReview() {
   btn.disabled = true;
   btn.textContent = 'Scanning...';
   launchBtn.disabled = true;
-  renderLoadingState(panel, 'Scanning project and preparing review...');
+  renderLoadingState(panel, `Scanning project at ${path.split('/').pop()} and preparing review...`);
   rawCardContents = {};
   thinkingCards = {};
   chatHistory = [];
-  infoDiv.textContent = '';
+  if (infoDiv) infoDiv.textContent = '';
 
   try {
     const resp = await fetch('/council/review-project', {
@@ -602,17 +647,19 @@ async function launchProjectReview() {
     });
 
     if (!resp.ok) {
-      const err = await resp.json();
-      const message = err.detail || 'Unknown error';
+      const err = await resp.json().catch(() => ({}));
+      const message = err.detail || err.message || `HTTP ${resp.status}: Path outside allowed root or unreadable`;
       showToast(message);
       renderErrorState(panel, message);
+      btn.disabled = false;
+      btn.textContent = 'Scan & Review';
+      launchBtn.disabled = false;
       return;
     }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let sawDone = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -624,9 +671,8 @@ async function launchProjectReview() {
         if (line.startsWith('data: ')) {
           try {
             const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'done') sawDone = true;
-            if (ev.type === 'project_info') {
-              infoDiv.textContent = `Scanning ${ev.total_files} files → reviewing ${ev.files_selected.length} core files`;
+            if (ev.type === 'project_info' && infoDiv) {
+              infoDiv.textContent = `Scanned ${ev.total_files} files → reviewing ${ev.files_selected.length} core files`;
             } else {
               handleEvent(ev, panel);
             }
@@ -787,7 +833,6 @@ async function viewMemory() {
     const resp = await fetch('/council/memory');
     const data = await resp.json();
 
-    // Map Fable typed edge colors
     const edgeColors = {
       supports: '#2f5d50',
       contradicts: '#9f3d32',
@@ -936,7 +981,6 @@ async function loadReplayRunDetail(runId) {
     const roster = run.roster || {};
     const phases = run.phases || [];
     const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
-    const finished = run.finished_at ? new Date(run.finished_at * 1000).toLocaleString() : 'in progress';
 
     detail.innerHTML = `
       <div class="preset-title">${escapeHtml(run.topic || 'Untitled run')}</div>
@@ -971,7 +1015,7 @@ setTokenBudgetProfile('balanced');
 fetchDemoCatalog();
 loadHardwareDefaults();
 
-document.getElementById('attachmentInput').addEventListener('change', (event) => {
+document.getElementById('attachmentInput')?.addEventListener('change', (event) => {
   const incoming = Array.from(event.target.files || []);
   const existingNames = new Set(selectedFiles.map(f => f.name));
   for (const f of incoming) {
