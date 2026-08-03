@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Hardware-fit roster (local-first usability)
+- The hardware suggester is now **memory-footprint aware**: it sizes the council to a concurrent memory budget (`RAM − reserve`, padded for KV cache) instead of a naive RAM tier. Real model diversity is only proposed when ≥2 strong (7B-class) models fit at once; otherwise a single best-fit model is shared across every seat so it stays resident. This stops the default 3-distinct-model roster from thrashing and timing out on 16GB machines.
+- The suggester now only proposes models that are actually installed locally (probed and briefly cached), and lists `ollama pull` commands for any gaps. `/hardware/suggest` returns `strategy`, `budget_gb`, and a human `reason`.
+- The web UI fits preset rosters to the detected hardware (`fitModelsToHardware`) and surfaces the fit reason, so choosing a preset never over-subscribes local memory.
+
+### Bug fixes
+- `GET /runs/{id}` and `DELETE /runs/{id}` now return **404** for an unknown run id (previously `200` with `{}` / `{"deleted": false}`).
+- Feedback `rating` is now a validated enum (`thumbs_up` / `thumbs_down` / `ignored`) — an invalid value returns **422**, and feedback for a nonexistent run returns **404** instead of a false `recorded: true` (the underlying FK insert was silently swallowed).
+- Fixed `env.example` / `.env` so an empty `COUNCIL_API_KEY` no longer captured its trailing inline comment as the key value (which made every endpoint return `403 Forbidden` on a fresh setup).
+
 ### Exposed-deployment hardening
 - The Docker image now starts via `main.py` (default bind `127.0.0.1`), so the startup guard that requires `COUNCIL_API_KEY` before binding a non-localhost interface can no longer be bypassed. Exposing the container now requires both `COUNCIL_HOST=0.0.0.0` and an API key.
 - Confined `review-project` / `code-graph` to `COUNCIL_PROJECT_ROOT` (default cwd) — arbitrary-filesystem reads are rejected with 403.

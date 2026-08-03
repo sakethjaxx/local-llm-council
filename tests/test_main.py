@@ -487,11 +487,34 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             deleted = await main.delete_persisted_run("r1")
         self.assertEqual(deleted, {"run_id": "r1", "deleted": True})
 
-        request = main.FeedbackRequest(action_index=0, rating="up", note="useful")
-        with patch.object(main.run_store, "record_feedback") as record_feedback:
+        request = main.FeedbackRequest(action_index=0, rating="thumbs_up", note="useful")
+        with patch.object(main.run_store, "run_exists", return_value=True), \
+             patch.object(main.run_store, "record_feedback") as record_feedback:
             feedback = await main.record_run_feedback("r1", request)
         self.assertEqual(feedback["recorded"], True)
-        record_feedback.assert_called_once_with("r1", 0, "up", "useful")
+        record_feedback.assert_called_once_with("r1", 0, "thumbs_up", "useful")
+
+    async def test_unknown_run_endpoints_return_404(self):
+        with patch.object(main.run_store, "get_run", return_value={}):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main.get_persisted_run("nope")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+        with patch.object(main.run_store, "delete_run", return_value=False):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main.delete_persisted_run("nope")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+        request = main.FeedbackRequest(action_index=0, rating="thumbs_down")
+        with patch.object(main.run_store, "run_exists", return_value=False):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main.record_run_feedback("nope", request)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_feedback_request_rejects_invalid_rating(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            main.FeedbackRequest(action_index=0, rating="up")
 
     async def test_export_run_endpoint_supports_markdown_json_and_zip(self):
         run = {

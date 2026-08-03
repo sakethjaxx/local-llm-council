@@ -1,41 +1,22 @@
 import hashlib
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
-
 SKIP_DIRS = {".git", "venv", "node_modules", "__pycache__", "dist", "build"}
 LANGUAGE_EXTENSIONS = {
-    ".py": "python",
-    ".js": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".go": "go",
-    ".rs": "rust",
-    ".java": "java",
-    ".kt": "java",
-    ".rb": "ruby",
-    ".cs": "csharp",
-    ".cpp": "cpp",
-    ".cc": "cpp",
-    ".h": "cpp",
+    ".py": "python", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "typescript", ".go": "go", ".rs": "rust",
+    ".java": "java", ".kt": "java", ".rb": "ruby", ".cs": "csharp",
+    ".cpp": "cpp", ".cc": "cpp", ".h": "cpp",
 }
 PYTHON_FRAMEWORKS = {
-    "fastapi": "fastapi",
-    "django": "django",
-    "flask": "flask",
-    "torch": "pytorch",
-    "tensorflow": "tensorflow",
-    "transformers": "huggingface",
+    "fastapi": "fastapi", "django": "django", "flask": "flask",
+    "torch": "pytorch", "tensorflow": "tensorflow", "transformers": "huggingface",
 }
 PACKAGE_FRAMEWORKS = {
-    "react": "react",
-    "vue": "vue",
-    "next": "nextjs",
-    "express": "express",
-    "svelte": "svelte",
+    "react": "react", "vue": "vue", "next": "nextjs", "express": "express", "svelte": "svelte",
 }
 DOMAIN_KEYWORDS = [
     ("api", ("api", "endpoint", "rest", "graphql")),
@@ -48,87 +29,56 @@ DOMAIN_KEYWORDS = [
 ]
 
 
-def _iter_files(root: Path):
-    for path in root.rglob("*"):
-        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        if path.is_file():
-            yield path
-
-
 def _read_text(path: Path, limit: int | None = None) -> str:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
+        return text[:limit] if limit else text
     except Exception:
         return ""
-    return text[:limit] if limit else text
 
 
 def _detect_languages(root: Path) -> list[str]:
     counts = Counter()
-    for path in _iter_files(root):
-        language = LANGUAGE_EXTENSIONS.get(path.suffix.lower())
-        if language:
-            counts[language] += 1
-    return [language for language, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]]
-
-
-def _detect_python_frameworks(root: Path) -> set[str]:
-    frameworks = set()
-    for filename in ("requirements.txt", "pyproject.toml"):
-        content = _read_text(root / filename).lower()
-        if not content:
-            continue
-        for marker, framework in PYTHON_FRAMEWORKS.items():
-            if marker in content:
-                frameworks.add(framework)
-    return frameworks
-
-
-def _detect_package_frameworks(root: Path) -> set[str]:
-    content = _read_text(root / "package.json")
-    if not content:
-        return set()
-    try:
-        package = json.loads(content)
-    except Exception:
-        return set()
-
-    dependencies = {}
-    dependencies.update(package.get("dependencies") or {})
-    dependencies.update(package.get("devDependencies") or {})
-    return {framework for marker, framework in PACKAGE_FRAMEWORKS.items() if marker in dependencies}
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if lang := LANGUAGE_EXTENSIONS.get(ext):
+                counts[lang] += 1
+    return [lang for lang, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]]
 
 
 def _detect_frameworks(root: Path) -> list[str]:
     frameworks = set()
-    frameworks.update(_detect_python_frameworks(root))
-    frameworks.update(_detect_package_frameworks(root))
+    for filename in ("requirements.txt", "pyproject.toml"):
+        if content := _read_text(root / filename).lower():
+            frameworks.update(fw for marker, fw in PYTHON_FRAMEWORKS.items() if marker in content)
 
-    root_markers = {
-        "go.mod": "go_modules",
-        "Cargo.toml": "cargo",
-        "pom.xml": "maven",
-        "build.gradle": "gradle",
-    }
-    for filename, framework in root_markers.items():
-        if (root / filename).is_file():
-            frameworks.add(framework)
+    if pkg_text := _read_text(root / "package.json"):
+        try:
+            pkg = json.loads(pkg_text)
+            deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+            frameworks.update(fw for marker, fw in PACKAGE_FRAMEWORKS.items() if marker in deps)
+        except Exception:
+            pass
+
+    for fname, fw in [("go.mod", "go_modules"), ("Cargo.toml", "cargo"), ("pom.xml", "maven"), ("build.gradle", "gradle")]:
+        if (root / fname).is_file():
+            frameworks.add(fw)
     return sorted(frameworks)
 
 
 def _detect_domain(root: Path) -> list[str]:
     chunks = []
-    readme = root / "README.md"
-    if readme.is_file():
-        chunks.append(_read_text(readme, 2000))
+    if readme := root / "README.md":
+        if readme.is_file():
+            chunks.append(_read_text(readme, 2000))
     for path in sorted(root.glob("*.md")):
-        if path.name == "README.md":
-            continue
-        chunks.append(_read_text(path, 500))
+        if path.name != "README.md":
+            chunks.append(_read_text(path, 500))
 
     text = "\n".join(chunks).lower()
-    return [tag for tag, keywords in DOMAIN_KEYWORDS if any(keyword in text for keyword in keywords)]
+    return [tag for tag, keywords in DOMAIN_KEYWORDS if any(kw in text for kw in keywords)]
 
 
 def fingerprint(root: str = ".") -> dict:
@@ -139,11 +89,7 @@ def fingerprint(root: str = ".") -> dict:
         "domain": _detect_domain(project_root),
     }
     payload = json.dumps(
-        {
-            "languages": sorted(result["languages"]),
-            "frameworks": sorted(result["frameworks"]),
-            "domain": sorted(result["domain"]),
-        },
+        {"languages": sorted(result["languages"]), "frameworks": sorted(result["frameworks"]), "domain": sorted(result["domain"])},
         sort_keys=True,
     )
     result["hash"] = hashlib.sha256(payload.encode()).hexdigest()[:16]

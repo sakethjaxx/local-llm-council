@@ -3,11 +3,64 @@ import os
 import re
 from pathlib import Path
 
-import networkx as nx
-
-
 EXCLUDED_DIRS = {".git", "__pycache__", "node_modules", "venv", ".env", "env"}
 SOURCE_SUFFIXES = (".py", ".js", ".ts", ".html", ".css")
+
+
+class ProjectGraph:
+    """Lightweight native Directed Graph replacing NetworkX dependency."""
+
+    def __init__(self):
+        self._nodes = set()
+        self._succ = {}
+        self._pred = {}
+
+    def add_node(self, node: str):
+        self._nodes.add(node)
+        self._succ.setdefault(node, {})
+        self._pred.setdefault(node, {})
+
+    def add_edge(self, u: str, v: str, **kwargs):
+        self.add_node(u)
+        self.add_node(v)
+        self._succ[u][v] = kwargs
+        self._pred[v][u] = kwargs
+
+    def predecessors(self, node: str):
+        return list(self._pred.get(node, {}).keys())
+
+    def get_edge_data(self, u: str, v: str, default=None):
+        return self._succ.get(u, {}).get(v, default)
+
+    def nodes(self):
+        return list(self._nodes)
+
+    def edges(self, data: bool = False):
+        if data:
+            return [(u, v, d) for u, succs in self._succ.items() for v, d in succs.items()]
+        return [(u, v) for u, succs in self._succ.items() for v in succs]
+
+    def in_degree(self, node=None):
+        if node is not None:
+            return len(self._pred.get(node, {}))
+        return [(n, len(self._pred.get(n, {}))) for n in self._nodes]
+
+    def out_degree(self, node=None):
+        if node is not None:
+            return len(self._succ.get(node, {}))
+        return [(n, len(self._succ.get(n, {}))) for n in self._nodes]
+
+    def degree(self, node: str):
+        return len(self._pred.get(node, {})) + len(self._succ.get(node, {}))
+
+    def number_of_nodes(self):
+        return len(self._nodes)
+
+    def number_of_edges(self):
+        return sum(len(s) for s in self._succ.values())
+
+    def __contains__(self, node: str):
+        return node in self._nodes
 
 
 def _iter_source_files(repo_root: Path):
@@ -23,9 +76,9 @@ def _relative_module_path(module_name: str) -> str:
     return module_name.replace(".", "/") + ".py"
 
 
-def build_project_graph(repo_root: str | Path = ".") -> nx.DiGraph:
+def build_project_graph(repo_root: str | Path = ".") -> ProjectGraph:
     root = Path(repo_root).resolve()
-    graph = nx.DiGraph()
+    graph = ProjectGraph()
 
     source_files = list(_iter_source_files(root))
     rel_paths = {path: str(path.relative_to(root)) for path in source_files}
@@ -33,7 +86,6 @@ def build_project_graph(repo_root: str | Path = ".") -> nx.DiGraph:
 
     for path, rel_path in rel_paths.items():
         graph.add_node(rel_path)
-
         try:
             content = path.read_text(encoding="utf-8")
         except Exception:

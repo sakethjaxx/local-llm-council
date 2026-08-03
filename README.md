@@ -35,10 +35,12 @@ Run several local or optional cloud LLMs as a structured review council. Each mo
 2. `cd local-llm-council`
 3. `python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate`
 4. `pip install -r requirements.txt`
-5. `cp env.example .env`
-6. `ollama pull llama3.2`
+5. `cp env.example .env`  (leave `COUNCIL_API_KEY` empty for localhost — do **not** add an inline comment after `=`)
+6. `ollama pull qwen2.5:7b`  (the app auto-fits the roster to your RAM and lists any extra `ollama pull` commands it wants)
 7. `uvicorn main:app --port 8765`
 8. open `http://localhost:8765`
+
+The roster is chosen automatically for your machine's memory ceiling: on a ~16GB box every seat shares one resident model (fast, no swap); a 24GB+ box unlocks a genuinely diverse multi-model council. See `GET /hardware/suggest` for the fitted roster and the reason.
 
 ## Configuration
 

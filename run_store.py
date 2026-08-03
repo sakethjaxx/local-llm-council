@@ -371,6 +371,11 @@ class RunStore:
             deleted = cursor.rowcount > 0
         return deleted
 
+    def run_exists(self, run_id: str) -> bool:
+        with self._connection() as conn:
+            row = conn.execute("SELECT 1 FROM runs WHERE run_id = ? LIMIT 1", (run_id,)).fetchone()
+        return row is not None
+
     def list_quality_metrics(self, limit: int = 100) -> dict:
         limit = max(1, min(int(limit), 500))
         with self._connection() as conn:

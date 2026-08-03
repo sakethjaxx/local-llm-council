@@ -13,7 +13,7 @@ import pathlib
 import signal
 import zipfile
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import httpx
 from pydantic import BaseModel
@@ -393,7 +393,9 @@ class ConfigCheckRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     action_index: int
-    rating: str
+    # Constrained so an unknown rating is rejected with 422 by request validation
+    # (per SPEC P1-1) instead of silently persisting a junk value.
+    rating: Literal["thumbs_up", "thumbs_down", "ignored"]
     note: str = ""
 
 @app.post("/council/chat")
@@ -439,8 +441,6 @@ async def council_chat(req: ChatRequest, request: Request):
         },
     )
 
-from memory_store import memory_store as memory_engine
-
 @app.get("/hardware/suggest")
 async def hardware_suggest():
     return get_hardware_suggestion()
@@ -475,7 +475,7 @@ async def ollama_bootstrap():
 
 @app.get("/council/memory")
 async def get_memory():
-    return memory_engine.get_graph_data()
+    return memory_store.get_graph_data()
 
 
 def _pick_top_files(graph_data: dict, k: int = 8) -> list[str]:
@@ -619,7 +619,10 @@ async def list_skills(limit: int = 50, domain: Optional[str] = None):
 
 @app.get("/runs/{run_id}")
 async def get_persisted_run(run_id: str):
-    return await asyncio.to_thread(run_store.get_run, run_id)
+    run = await asyncio.to_thread(run_store.get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    return run
 
 
 @app.get("/runs/{run_id}/export")
@@ -674,11 +677,17 @@ async def export_persisted_run(run_id: str, format: str = "md"):
 @app.delete("/runs/{run_id}")
 async def delete_persisted_run(run_id: str):
     deleted = await asyncio.to_thread(run_store.delete_run, run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="run not found")
     return {"run_id": run_id, "deleted": deleted}
 
 
 @app.post("/runs/{run_id}/feedback")
 async def record_run_feedback(run_id: str, req: FeedbackRequest):
+    # Reject feedback for a run that does not exist instead of returning a false
+    # success — the underlying INSERT would fail the FK and be swallowed.
+    if not await asyncio.to_thread(run_store.run_exists, run_id):
+        raise HTTPException(status_code=404, detail="run not found")
     await asyncio.to_thread(run_store.record_feedback, run_id, req.action_index, req.rating, req.note)
     return {"run_id": run_id, "action_index": req.action_index, "rating": req.rating, "recorded": True}
 

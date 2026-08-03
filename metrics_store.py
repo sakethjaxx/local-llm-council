@@ -3,7 +3,6 @@ import os
 import threading
 import time
 from collections import deque
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -21,11 +20,7 @@ def _coerce_usage(usage: Any) -> Optional[dict]:
     if not isinstance(usage, dict):
         return None
 
-    normalized = {}
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        value = usage.get(key)
-        if isinstance(value, (int, float)):
-            normalized[key] = int(value)
+    normalized = {k: int(v) for k in ("prompt_tokens", "completion_tokens", "total_tokens") if isinstance(v := usage.get(k), (int, float))}
     return normalized or None
 
 
@@ -43,9 +38,7 @@ class MetricsStore:
 
     def _metrics_path(self) -> Optional[Path]:
         path = os.getenv("COUNCIL_METRICS_FILE", "council_metrics.jsonl").strip()
-        if not path:
-            return None
-        return Path(path)
+        return Path(path) if path else None
 
     def start_run(self, run_type: str, metadata: Optional[dict] = None, run_id: Optional[str] = None) -> str:
         run_id = run_id or str(uuid4())
@@ -136,10 +129,9 @@ class MetricsStore:
                     totals[key] += int(usage.get(key, 0) or 0)
             run["totals"] = totals
 
-            frozen = deepcopy(run)
-            self._recent_runs.appendleft(frozen)
+            self._recent_runs.appendleft(run)
 
-        self._append_to_disk(frozen)
+        self._append_to_disk(run)
 
     def _append_to_disk(self, run: dict) -> None:
         path = self._metrics_path()
@@ -154,7 +146,7 @@ class MetricsStore:
 
     def list_runs(self, limit: int = 20) -> list[dict]:
         with self._lock:
-            active = [deepcopy(run) for run in self._active_runs.values()]
+            active = list(self._active_runs.values())
             recent = list(self._recent_runs)[:limit]
         combined = active + recent
         combined.sort(key=lambda run: run["started_at"], reverse=True)

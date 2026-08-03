@@ -107,8 +107,8 @@ Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-ph
 
 ## Test Suite
 
-Run: `./venv/bin/pytest tests/ -q`
-Current: 30 tests passing. Tests use unittest stubs for litellm and httpx.
+Run: `./venv/bin/pytest tests/ -q` (or `python3 -m pytest tests/ -q`)
+Current: 102 tests passing. Tests use unittest stubs for litellm and httpx.
 
 ## What NOT To Do
 

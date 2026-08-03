@@ -11,44 +11,28 @@ import fitz  # PyMuPDF
 
 from logging_utils import get_logger
 
-
 logger = get_logger(__name__)
 url_pattern = re.compile(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w.-]*')
 TEXT_CHAR_LIMIT = 12000
 MAX_FETCH_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
+TEXT_EXTENSIONS = {".md", ".txt", ".py", ".js", ".ts", ".html", ".css", ".yaml", ".yml"}
 
 
 def _truncate(value: str, limit: int = TEXT_CHAR_LIMIT) -> str:
-    if len(value) <= limit:
-        return value
-    return value[:limit] + "\n...[truncated]"
+    return value if len(value) <= limit else value[:limit] + "\n...[truncated]"
 
 
 def _is_safe_url(url: str) -> bool:
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.hostname.lower() == "localhost":
             return False
-
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-        if hostname.lower() == "localhost":
-            return False
-
-        resolved = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-        if not resolved:
-            return False
-
-        for entry in resolved:
-            sockaddr = entry[4]
-            if not sockaddr:
-                return False
-            ip = ipaddress.ip_address(sockaddr[0])
-            if not ip.is_global:
-                return False
-        return True
+        resolved = socket.getaddrinfo(parsed.hostname, None, type=socket.SOCK_STREAM)
+        return bool(resolved) and all(
+            entry[4] and ipaddress.ip_address(entry[4][0]).is_global
+            for entry in resolved
+        )
     except Exception:
         return False
 
@@ -69,7 +53,6 @@ async def _fetch_url_bytes(client: httpx.AsyncClient, url: str) -> tuple[bytes, 
                 continue
 
             resp.raise_for_status()
-
             content_length = resp.headers.get("content-length")
             if content_length:
                 try:
@@ -95,6 +78,7 @@ async def _fetch_url_bytes(client: httpx.AsyncClient, url: str) -> tuple[bytes, 
 def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
     normalized_name = (filename or "attachment").lower()
     normalized_type = (content_type or "application/octet-stream").lower()
+    safe_name = filename or "attachment"
 
     try:
         if normalized_type.startswith("image/"):
@@ -128,7 +112,7 @@ def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
                 "text": _truncate(pretty.strip()),
             }
 
-        if normalized_name.endswith((".md", ".txt", ".py", ".js", ".ts", ".html", ".css", ".yaml", ".yml")) or normalized_type.startswith("text/"):
+        if normalized_name.endswith(tuple(TEXT_EXTENSIONS)) or normalized_type.startswith("text/"):
             decoded = raw.decode("utf-8", errors="replace")
             return {
                 "kind": "text",
@@ -139,16 +123,16 @@ def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
     except Exception as exc:
         return {
             "kind": "unsupported",
-            "filename": filename or "attachment",
+            "filename": safe_name,
             "content_type": normalized_type,
-            "summary": f"Failed to parse attachment {filename or 'attachment'}: {exc}",
+            "summary": f"Failed to parse attachment {safe_name}: {exc}",
         }
 
     return {
         "kind": "unsupported",
-        "filename": filename or "attachment",
+        "filename": safe_name,
         "content_type": normalized_type,
-        "summary": f"Unsupported attachment kept as metadata only: {filename or 'attachment'} ({normalized_type})",
+        "summary": f"Unsupported attachment kept as metadata only: {safe_name} ({normalized_type})",
     }
 
 
@@ -157,25 +141,20 @@ def format_attachments_for_prompt(attachments: list[dict]) -> str:
         return ""
 
     parts = ["[Uploaded Attachments]"]
-    for attachment in attachments:
-        kind = attachment.get("kind")
-        filename = attachment.get("filename", "attachment")
-        content_type = attachment.get("content_type", "unknown")
+    for att in attachments:
+        kind, fname, ctype = att.get("kind"), att.get("filename", "attachment"), att.get("content_type", "unknown")
         if kind == "text":
-            parts.append(f"--- FILE: {filename} ({content_type}) ---\n{attachment.get('text', '')}")
+            parts.append(f"--- FILE: {fname} ({ctype}) ---\n{att.get('text', '')}")
         elif kind == "image":
-            parts.append(f"--- IMAGE: {filename} ({content_type}) ---")
+            parts.append(f"--- IMAGE: {fname} ({ctype}) ---")
         else:
-            parts.append(f"--- ATTACHMENT: {attachment.get('summary', filename)} ---")
+            parts.append(f"--- ATTACHMENT: {att.get('summary', fname)} ---")
     return "\n\n".join(parts).strip()
+
 
 async def parse_input(text: str) -> str:
     urls = url_pattern.findall(text)
-    if not urls:
-        return text
-
-    if os.getenv("COUNCIL_ALLOW_URL_FETCH", "false").strip().lower() != "true":
-        logger.info("url_fetch_disabled")
+    if not urls or os.getenv("COUNCIL_ALLOW_URL_FETCH", "false").strip().lower() != "true":
         return text
 
     scraped_data = []
@@ -190,16 +169,12 @@ async def parse_input(text: str) -> str:
                 fetched = await _fetch_url_bytes(client, url)
                 if not fetched:
                     continue
-
                 body, headers, final_url = fetched
-
                 content_type = headers.get("content-type", "").lower()
+
                 if final_url.lower().endswith(".pdf") or content_type.startswith("application/pdf"):
-                    logger.info("url_fetch_pdf_detected", extra={"url": final_url})
                     doc = fitz.open(stream=body, filetype="pdf")
-                    pdf_text = ""
-                    for page in doc:
-                        pdf_text += page.get_text()
+                    pdf_text = "".join(page.get_text() for page in doc)
                     scraped_data.append(f"--- CONTENT FROM {final_url} ---\n{pdf_text[:10000]}")
                 else:
                     soup = BeautifulSoup(body, "html.parser")
@@ -210,8 +185,5 @@ async def parse_input(text: str) -> str:
             except Exception as e:
                 scraped_data.append(f"--- FAILED TO SCRAPE {url}: {str(e)} ---")
                 logger.exception("url_fetch_failed", extra={"url": url, "error": str(e)})
-            
-    if scraped_data:
-        appended_text = "\n\n".join(scraped_data)
-        return text + "\n\n[System Extracted Content]:\n" + appended_text
-    return text
+
+    return text + "\n\n[System Extracted Content]:\n" + "\n\n".join(scraped_data) if scraped_data else text

@@ -1,24 +1,18 @@
-import litellm
 import asyncio
 import os
+import litellm
 from cloud_keys import litellm_kwargs_for_model
 from logging_utils import get_logger
-
 
 logger = get_logger(__name__)
 
 CHUNK_SIZE_LIMIT = 12000
-CHUNK_OVERLAP = 500  # carry context across the cut so cross-chunk references survive
+CHUNK_OVERLAP = 500
 
 
 def _chunk_text(text: str, limit: int = CHUNK_SIZE_LIMIT, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """Split into <= limit-char chunks, preferring newline boundaries, with a
-    small overlap so a symbol defined in one chunk and used in the next isn't
-    severed. Hard-caps at `limit` so a single giant (minified) line can't produce
-    an oversized chunk."""
     chunks: list[str] = []
-    start = 0
-    n = len(text)
+    start, n = 0, len(text)
     while start < n:
         end = min(start + limit, n)
         if end < n:
@@ -50,25 +44,20 @@ async def chunk_and_summarize(text: str, base_model: str) -> str:
         )
         return resp.choices[0].message.content
 
-    async def summarize_chunk(idx: int, chunk: str) -> str:
-        prompt = f"Summarize this segment of a larger document. Retain all technical facts, logic, and structure.\n\n{chunk}"
-        try:
-            return f"--- Segment {idx+1} Summary ---\n{await _complete(prompt, 600)}\n"
-        except Exception as exc:
-            logger.exception("summarizer_chunk_failed", extra={"chunk_index": idx, "error": str(exc)})
-            return f"--- Segment {idx+1} (Truncated due to error) ---\n{chunk[:1000]}...\n"
-
     sem = asyncio.Semaphore(4)
 
-    async def bounded_summarize(idx, chunk):
+    async def summarize_chunk(idx: int, chunk: str) -> str:
         async with sem:
-            return await summarize_chunk(idx, chunk)
+            prompt = f"Summarize this segment of a larger document. Retain all technical facts, logic, and structure.\n\n{chunk}"
+            try:
+                return f"--- Segment {idx+1} Summary ---\n{await _complete(prompt, 600)}\n"
+            except Exception as exc:
+                logger.exception("summarizer_chunk_failed", extra={"chunk_index": idx, "error": str(exc)})
+                return f"--- Segment {idx+1} (Truncated due to error) ---\n{chunk[:1000]}...\n"
 
-    summaries = await asyncio.gather(*[bounded_summarize(i, c) for i, c in enumerate(chunks)])
+    summaries = await asyncio.gather(*[summarize_chunk(i, c) for i, c in enumerate(chunks)])
     mapped = "\n".join(summaries)
 
-    # Reduce: with many segments the concatenated map output is itself long and
-    # fragmented. One consolidation pass merges it into a single coherent brief.
     if len(chunks) <= 3:
         return mapped
     try:
