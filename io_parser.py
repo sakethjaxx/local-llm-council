@@ -136,15 +136,23 @@ def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
     }
 
 
-def format_attachments_for_prompt(attachments: list[dict]) -> str:
+def format_attachments_for_prompt(attachments: list[dict], max_total_chars: int = 16000) -> str:
     if not attachments:
         return ""
+
+    text_attachments = [att for att in attachments if att.get("kind") == "text" and att.get("text")]
+    total_raw_len = sum(len(att.get("text", "")) for att in text_attachments)
+    scale = max_total_chars / total_raw_len if total_raw_len > max_total_chars else 1.0
 
     parts = ["[Uploaded Attachments]"]
     for att in attachments:
         kind, fname, ctype = att.get("kind"), att.get("filename", "attachment"), att.get("content_type", "unknown")
         if kind == "text":
-            parts.append(f"--- FILE: {fname} ({ctype}) ---\n{att.get('text', '')}")
+            content = att.get("text", "")
+            if scale < 1.0 and len(content) > 200:
+                budget = max(200, int(len(content) * scale))
+                content = content[:budget] + "\n...[proportionally budget-truncated]"
+            parts.append(f"--- FILE: {fname} ({ctype}) ---\n{content}")
         elif kind == "image":
             parts.append(f"--- IMAGE: {fname} ({ctype}) ---")
         else:

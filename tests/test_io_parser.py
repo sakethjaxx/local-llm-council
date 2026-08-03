@@ -49,6 +49,15 @@ class IOParserTests(unittest.TestCase):
         self.assertIn("--- IMAGE: shot.png (image/png) ---", formatted)
         self.assertIn("--- ATTACHMENT: Binary data ---", formatted)
 
+    def test_proportional_attachment_budgeting(self):
+        attachments = [
+            {"kind": "text", "filename": "large1.txt", "content_type": "text/plain", "text": "A" * 10000},
+            {"kind": "text", "filename": "large2.txt", "content_type": "text/plain", "text": "B" * 10000},
+        ]
+        formatted = format_attachments_for_prompt(attachments, max_total_chars=1000)
+        self.assertIn("...[proportionally budget-truncated]", formatted)
+        self.assertLess(len(formatted), 1500)
+
     def test_ingest_folder(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
