@@ -267,12 +267,8 @@ async def ingest_local_folder(payload: FolderIngestRequest):
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    global _INDEX_HTML_CACHE
-    if _INDEX_HTML_CACHE is None:
-        _INDEX_HTML_CACHE = await asyncio.to_thread(
-            lambda: open("static/index.html").read()
-        )
-    return _INDEX_HTML_CACHE
+    return open("static/index.html").read()
+
 
 
 @app.post("/council/stream")

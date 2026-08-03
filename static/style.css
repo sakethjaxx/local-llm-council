@@ -14,7 +14,7 @@
   --chairman: #9c7a4d;
   --glass: blur(16px);
   --shadow: 0 18px 48px rgba(42, 52, 45, 0.08);
-  --sidebar-width: 370px;
+  --sidebar-width: 360px;
   --code-bg: rgba(47, 93, 80, 0.08);
 }
 
@@ -148,9 +148,11 @@ header {
 
 main {
   display: grid;
-  grid-template-columns: var(--sidebar-width) 8px 1fr;
+  grid-template-columns: clamp(280px, var(--sidebar-width, 360px), 480px) 8px minmax(0, 1fr);
   flex: 1;
   min-height: calc(100vh - 75px);
+  width: 100%;
+  overflow: hidden;
 }
 
 /* ── RESIZABLE SPLITTER HANDLE ── */
@@ -190,6 +192,9 @@ main {
   gap: 18px;
   height: calc(100vh - 75px);
   overflow-y: auto;
+  min-width: 280px;
+  max-width: 480px;
+  width: 100%;
 }
 
 .section-title {
@@ -271,7 +276,7 @@ select {
 }
 .btn-small { padding: 4px 9px; font-size: 11px; }
 
-/* ── SEAT ITEM (STRICT NON-OVERLAPPING DELETE BUTTON) ── */
+/* ── SEAT ITEM ── */
 .seat-list {
   display: flex;
   flex-direction: column;
@@ -289,7 +294,7 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 30px; /* Dedicated space so ✕ never overlaps model text */
+  padding-right: 30px;
   margin-bottom: 6px;
 }
 .seat-dot {
@@ -399,6 +404,12 @@ details.accordion .accordion-content {
   text-align: center;
   font-family: 'IBM Plex Mono', monospace;
   gap: 12px;
+  width: 100%;
+  max-width: 650px;
+  margin: 0 auto;
+  word-break: normal;
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 .skeleton-line {
   width: min(420px, 80%);
@@ -469,6 +480,8 @@ details.accordion .accordion-content {
   height: calc(100vh - 75px);
   overflow-y: auto;
   scroll-behavior: smooth;
+  min-width: 0;
+  width: 100%;
 }
 
 .phase-banner {
@@ -689,7 +702,7 @@ details.accordion .accordion-content {
   header { padding: 14px 16px; flex-wrap: wrap; }
   main { grid-template-columns: 1fr; }
   .resizer { display: none; }
-  .config-panel, .council-panel { height: auto; }
+  .config-panel, .council-panel { height: auto; max-width: 100%; }
   .config-panel { border-right: 0; border-bottom: 1px solid var(--border); }
   .replay-layout { grid-template-columns: 1fr; }
 }

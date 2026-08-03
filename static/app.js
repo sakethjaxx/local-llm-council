@@ -156,7 +156,6 @@ async function bulkIngestFolder() {
     const data = await resp.json();
     if (infoDiv) infoDiv.textContent = `Ingested ${data.file_count} project files into prompt context.`;
     
-    // Auto populate topic text if empty
     const topic = document.getElementById('topicText');
     if (topic && !topic.value.trim() && data.formatted_prompt_text) {
       topic.value = `[Review Request for ${path.split('/').pop()}]\n\n${data.formatted_prompt_text}`;
@@ -185,7 +184,9 @@ function initResizer() {
 
   document.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
-    const newWidth = Math.min(Math.max(e.clientX, 280), 650);
+    const windowWidth = window.innerWidth;
+    const maxSidebar = Math.min(480, Math.floor(windowWidth * 0.45));
+    const newWidth = Math.min(Math.max(e.clientX, 280), maxSidebar);
     document.documentElement.style.setProperty('--sidebar-width', `${newWidth}px`);
   });
 
@@ -412,7 +413,7 @@ async function refreshPreflight() {
   }
 }
 
-// ── SEAT BUILDER UI (STRICT NON-OVERLAPPING DELETE BUTTON) ──
+// ── SEAT BUILDER UI ──
 function renderSeats() {
   const list = document.getElementById('seatList');
   if (!list) return;
