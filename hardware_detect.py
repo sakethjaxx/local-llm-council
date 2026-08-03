@@ -144,6 +144,20 @@ def _build_config(architect_model: str, security_model: str, perf_model: str, ch
     }
 
 
+def _get_model_gb(model: str) -> float:
+    if model in _MODEL_GB:
+        return _MODEL_GB[model]
+    tag = model.split(":")[-1].lower() if ":" in model else ""
+    if "70b" in tag: return 40.0
+    if "32b" in tag or "33b" in tag: return 20.0
+    if "14b" in tag or "15b" in tag: return 9.0
+    if "8b" in tag or "9b" in tag: return 5.0
+    if "7b" in tag: return 4.5
+    if "3b" in tag or "4b" in tag: return 2.2
+    if "1b" in tag or "2b" in tag: return 1.5
+    return 4.5
+
+
 def _pick_roster(total_ram_gb: float, installed: list[str] | None) -> dict:
     """Choose the best-fitting roster for the concurrent memory budget."""
     reserve = _reserve_gb(total_ram_gb)
@@ -160,13 +174,14 @@ def _pick_roster(total_ram_gb: float, installed: list[str] | None) -> dict:
     diverse: list[str] = []
     total_w = 0.0
     for m in pool:
-        if _MODEL_GB[m] < _STRONG_GB:
+        m_gb = _get_model_gb(m)
+        if m_gb < _STRONG_GB:
             continue
         if len(diverse) >= 3:
             break
-        if _fits(total_w + _MODEL_GB[m], budget):
+        if _fits(total_w + m_gb, budget):
             diverse.append(m)
-            total_w += _MODEL_GB[m]
+            total_w += m_gb
 
     if len(diverse) >= 2:
         seats = list(diverse)
@@ -181,7 +196,7 @@ def _pick_roster(total_ram_gb: float, installed: list[str] | None) -> dict:
         )
     else:
         # --- Single best-fit model shared across every seat (stays resident). ---
-        best = next((m for m in pool if _fits(_MODEL_GB[m], budget)), None)
+        best = next((m for m in pool if _fits(_get_model_gb(m), budget)), None)
         if best is None:
             best = pool[-1]  # nothing fits cleanly; best-effort smallest
         seats = [best, best, best]

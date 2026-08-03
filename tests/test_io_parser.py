@@ -1,9 +1,12 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from io_parser import (
     _is_safe_url,
     _truncate,
     format_attachments_for_prompt,
+    ingest_folder,
     parse_uploaded_file,
 )
 
@@ -45,6 +48,24 @@ class IOParserTests(unittest.TestCase):
         self.assertIn("--- FILE: doc.txt (text/plain) ---", formatted)
         self.assertIn("--- IMAGE: shot.png (image/png) ---", formatted)
         self.assertIn("--- ATTACHMENT: Binary data ---", formatted)
+
+    def test_ingest_folder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "doc1.md").write_text("# Doc 1", encoding="utf-8")
+            (root / "config.json").write_text('{"a": 1}', encoding="utf-8")
+
+            # Subdir to ignore
+            git_dir = root / ".git"
+            git_dir.mkdir()
+            (git_dir / "HEAD").write_text("ref: refs/heads/main", encoding="utf-8")
+
+            attachments = ingest_folder(str(root))
+            self.assertEqual(len(attachments), 2)
+            filenames = [a["filename"] for a in attachments]
+            self.assertIn("doc1.md", filenames)
+            self.assertIn("config.json", filenames)
+            self.assertNotIn(".git/HEAD", filenames)
 
     def test_is_safe_url(self):
         self.assertFalse(_is_safe_url("ftp://example.com"))

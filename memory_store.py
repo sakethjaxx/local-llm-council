@@ -32,10 +32,13 @@ class MemoryExtraction(BaseModel):
 
 def _extract_json_block(raw: str) -> str:
     raw = raw.strip()
-    if raw.startswith("```"):
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
-        if match:
-            return match.group(1).strip()
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    first_brace = raw.find("{")
+    last_brace = raw.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        return raw[first_brace:last_brace + 1]
     return raw
 
 

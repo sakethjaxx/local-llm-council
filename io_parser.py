@@ -187,3 +187,41 @@ async def parse_input(text: str) -> str:
                 logger.exception("url_fetch_failed", extra={"url": url, "error": str(e)})
 
     return text + "\n\n[System Extracted Content]:\n" + "\n\n".join(scraped_data) if scraped_data else text
+
+
+SKIP_INGEST_DIRS = {".git", "venv", "node_modules", "__pycache__", "dist", "build", ".env", "env"}
+
+
+def ingest_folder(folder_path: str, max_files: int = 50) -> list[dict]:
+    """Bulk ingest a local directory, parsing up to max_files supported attachments.
+    Uses Ponytail (KISS/YAGNI) rules to skip build noise, auto-truncate text,
+    and output clean prompt-ready attachment representations."""
+    root = os.path.abspath(folder_path)
+    if not os.path.exists(root) or not os.path.isdir(root):
+        logger.warning("ingest_folder_not_found", extra={"folder_path": folder_path})
+        return []
+
+    attachments = []
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_INGEST_DIRS]
+        for fname in sorted(files):
+            if len(attachments) >= max_files:
+                break
+            full_path = os.path.join(dirpath, fname)
+            rel_name = os.path.relpath(full_path, root)
+            try:
+                with open(full_path, "rb") as f:
+                    raw = f.read()
+                ext = os.path.splitext(fname)[1].lower()
+                ctype = "application/json" if ext == ".json" else ("application/pdf" if ext == ".pdf" else "text/plain")
+                parsed = parse_uploaded_file(rel_name, ctype, raw)
+                if parsed.get("kind") != "unsupported":
+                    attachments.append(parsed)
+            except Exception as exc:
+                logger.warning("ingest_folder_file_error", extra={"file": rel_name, "error": str(exc)})
+        if len(attachments) >= max_files:
+            break
+
+    logger.info("ingest_folder_completed", extra={"folder_path": root, "file_count": len(attachments)})
+    return attachments
+

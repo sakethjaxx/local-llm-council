@@ -27,7 +27,7 @@ from demo_catalog import get_demo_catalog, load_presets
 from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES, normalize_token_budget_profile
 from cloud_keys import extract_cloud_keys, scoped_cloud_keys
 from hardware_detect import get_default_council_config, get_hardware_suggestion
-from io_parser import parse_uploaded_file
+from io_parser import format_attachments_for_prompt, ingest_folder, parse_uploaded_file
 from logging_utils import get_logger
 from memory_store import memory_store
 from metrics_store import metrics_store
@@ -237,6 +237,27 @@ app.mount("/demo-samples", StaticFiles(directory="demo_samples"), name="demo-sam
 
 
 _INDEX_HTML_CACHE: Optional[str] = None
+
+
+class FolderIngestRequest(BaseModel):
+    folder_path: str
+    max_files: Optional[int] = 50
+
+
+@app.post("/ingest/folder")
+async def ingest_local_folder(payload: FolderIngestRequest):
+    """
+    Bulk ingest a local folder path, returning parsed attachments and formatted prompt text.
+    """
+    if not payload.folder_path:
+        raise HTTPException(status_code=400, detail="folder_path is required")
+    attachments = await asyncio.to_thread(ingest_folder, payload.folder_path, payload.max_files or 50)
+    formatted = format_attachments_for_prompt(attachments)
+    return {
+        "file_count": len(attachments),
+        "attachments": attachments,
+        "formatted_prompt_text": formatted,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
