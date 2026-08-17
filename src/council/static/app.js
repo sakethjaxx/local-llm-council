@@ -1399,7 +1399,10 @@ async function loadReplayRuns() {
       const topic = escapeHtml((run.topic || '').slice(0, 72) || 'Untitled run');
       return `
         <div class="replay-run-item" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
-          <div class="replay-run-title">${topic}</div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+            <div class="replay-run-title">${topic}</div>
+            <button class="btn btn-small btn-danger replay-delete-btn" onclick="event.stopPropagation(); deleteSingleReplay('${escapeHtml(run.run_id)}')" title="Delete this run">🗑️</button>
+          </div>
           <div class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</div>
         </div>
       `;
@@ -1408,6 +1411,38 @@ async function loadReplayRuns() {
     await loadReplayRunDetail(runs[0].run_id);
   } catch (e) {
     list.innerHTML = '<div class="replay-empty">Failed to load persisted runs.</div>';
+  }
+}
+
+async function deleteSingleReplay(runId) {
+  if (!runId) return;
+  if (!confirm(`Delete run ${runId}? This will remove all associated phase outputs and skills.`)) return;
+  try {
+    const resp = await fetch(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+    if (resp.ok) {
+      showToast('Replay deleted.');
+      await loadReplayRuns();
+    } else {
+      showToast('Failed to delete replay.');
+    }
+  } catch (e) {
+    showToast('Network error deleting replay.');
+  }
+}
+
+async function deleteAllReplays() {
+  if (!confirm('Are you sure you want to delete ALL replay history? This cannot be undone.')) return;
+  try {
+    const resp = await fetch('/runs', { method: 'DELETE' });
+    if (resp.ok) {
+      showToast('All replay history cleared.');
+      await loadReplayRuns();
+      document.getElementById('replayRunDetail').innerHTML = '<div class="replay-empty">No persisted runs.</div>';
+    } else {
+      showToast('Failed to clear replay history.');
+    }
+  } catch (e) {
+    showToast('Network error clearing replay history.');
   }
 }
 
@@ -1453,6 +1488,7 @@ async function loadReplayRunDetail(runId) {
       <div class="replay-run-meta replay-detail-meta">run_id: ${escapeHtml(run.run_id)} • status: ${escapeHtml(run.status)} • started: ${escapeHtml(started)}</div>
       <div class="inline-actions replay-actions">
         <button class="btn btn-small" id="replayExportButton">Download report</button>
+        <button class="btn btn-small btn-danger" onclick="deleteSingleReplay('${escapeHtml(run.run_id)}')">Delete replay</button>
       </div>
       ${phases.map(phase => {
         const seat = roster[phase.member_id] || {};

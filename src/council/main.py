@@ -799,6 +799,12 @@ async def delete_persisted_run(run_id: str):
     return {"run_id": run_id, "deleted": deleted}
 
 
+@app.delete("/runs")
+async def delete_all_persisted_runs():
+    deleted_count = await asyncio.to_thread(run_store.delete_all_runs)
+    return {"deleted_count": deleted_count, "deleted": True}
+
+
 @app.post("/runs/{run_id}/feedback")
 async def record_run_feedback(run_id: str, req: FeedbackRequest):
     # Reject feedback for a run that does not exist instead of returning a false

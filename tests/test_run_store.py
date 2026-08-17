@@ -56,6 +56,14 @@ class RunStoreTests(unittest.TestCase):
         self.assertEqual(self.store.delete_run("run-2"), True)
         self.assertEqual(self.store.get_run("run-2"), {})
 
+    def test_delete_all_runs(self):
+        self.store.begin_run("run-a", "topic A", {}, deep_debate=False)
+        self.store.begin_run("run-b", "topic B", {}, deep_debate=False)
+        self.assertEqual(len(self.store.list_runs()), 2)
+        deleted = self.store.delete_all_runs()
+        self.assertEqual(deleted, 2)
+        self.assertEqual(len(self.store.list_runs()), 0)
+
     def test_idempotent_writes(self):
         self.store.begin_run("run-3", "topic", {}, deep_debate=False)
         self.store.begin_run("run-3", "topic updated", {}, deep_debate=True)

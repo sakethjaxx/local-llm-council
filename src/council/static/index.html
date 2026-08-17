@@ -210,7 +210,10 @@
   <div class="modal-overlay" id="replayModal">
     <div class="modal-content">
       <div class="modal-header">
-        <span>Run replay</span>
+        <span>Run replay & History</span>
+        <div style="display: flex; gap: 8px; align-items: center; margin-left: auto; margin-right: 8px;">
+          <button class="btn btn-small btn-danger" id="clearAllReplaysBtn" onclick="deleteAllReplays()">Clear All History</button>
+        </div>
         <button class="btn btn-small" onclick="closeReplayModal()">X</button>
       </div>
       <div class="replay-layout">

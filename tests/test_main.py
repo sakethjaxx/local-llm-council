@@ -558,6 +558,11 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
                 await main.delete_persisted_run("nope")
         self.assertEqual(ctx.exception.status_code, 404)
 
+        with patch.object(main.run_store, "delete_all_runs", return_value=5):
+            res = await main.delete_all_persisted_runs()
+            self.assertEqual(res["deleted_count"], 5)
+            self.assertEqual(res["deleted"], True)
+
         request = main.FeedbackRequest(action_index=0, rating="thumbs_down")
         with patch.object(main.run_store, "run_exists", return_value=False):
             with self.assertRaises(main.HTTPException) as ctx:
