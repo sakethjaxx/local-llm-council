@@ -998,8 +998,7 @@ class CouncilOrchestrator:
             task = asyncio.create_task(
                 _background_post_run(run_id, combined_topic, chairman_decision_text, chairman_cfg["model"])
             )
-            with contextlib.suppress(Exception):
-                task.add_done_callback(lambda t: t.exception())
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
             yield {"type": "done", "status": final_status, "errored_members": sorted(errored_members)}
         except Exception as exc:
             metrics_store.finish_run(run_id, status="failed", error=str(exc))
