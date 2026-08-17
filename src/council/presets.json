@@ -1,10 +1,10 @@
 {
-  "version": "1",
+  "version": "2",
   "presets": [
     {
       "id": "fast",
-      "label": "Fast Triage",
-      "description": "Low-latency council for a controlled architecture or product brief demo.",
+      "label": "⚡ Fast Triage (3-Seat Quick Check)",
+      "description": "Low-latency council for architectural briefs, sanity checks, and quick triage.",
       "topic": "Review this local-first AI council project for architectural clarity, practical risks, and the next three improvements to ship.",
       "topic_placeholder": "Review this local-first AI council project for architectural clarity, practical risks, and the next three improvements to ship.",
       "deep_debate": false,
@@ -13,189 +13,450 @@
       "sample_ids": ["architecture-brief"],
       "sample_files": ["architecture_brief.md"],
       "chairman_model": "ollama/qwen2.5:7b",
-      "seats": [
-        {
-          "label": "Lead Architect",
-          "model": "ollama/qwen2.5:7b",
-          "color": "#4D6BFE",
-          "icon": "🐋",
-          "persona": "You are the Lead Architect. Focus on architecture, maintainability, and simplification."
-        },
-        {
-          "label": "Security Auditor",
-          "model": "ollama/gemma2:9b",
-          "color": "#FF4444",
-          "icon": "🛡️",
-          "persona": "You are the Security Auditor. Focus on unsafe defaults, data exposure, and operational risk."
-        },
-        {
-          "label": "Performance Eng",
-          "model": "ollama/llama3.1:8b",
-          "color": "#00A76F",
-          "icon": "⚡",
-          "persona": "You are the Performance Engineer. Focus on latency, memory pressure, and user-perceived responsiveness."
-        }
-      ],
       "config": {
         "architect": {
           "label": "Lead Architect",
           "model": "ollama/qwen2.5:7b",
           "color": "#4D6BFE",
           "icon": "🐋",
-          "persona": "You are the Lead Architect. Focus on architecture, maintainability, and simplification."
+          "persona": "You are the Lead Architect. Focus on architecture, maintainability, and simplification.",
+          "temperature": 0.25,
+          "top_p": 0.90
         },
         "security": {
           "label": "Security Auditor",
-          "model": "ollama/gemma2:9b",
+          "model": "ollama/qwen2.5:7b",
           "color": "#FF4444",
           "icon": "🛡️",
-          "persona": "You are the Security Auditor. Focus on unsafe defaults, data exposure, and operational risk."
+          "persona": "You are the Security Auditor. Focus on unsafe defaults, data exposure, and operational risk.",
+          "temperature": 0.15,
+          "top_p": 0.85
         },
         "perf": {
           "label": "Performance Eng",
-          "model": "ollama/llama3.1:8b",
-          "color": "#00A76F",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#00FF00",
           "icon": "⚡",
-          "persona": "You are the Performance Engineer. Focus on latency, memory pressure, and user-perceived responsiveness."
+          "persona": "You are the Performance Engineer. Focus on latency, memory pressure, and user-perceived responsiveness.",
+          "temperature": 0.35,
+          "top_p": 0.95
         },
         "chairman": {
           "label": "Chairman",
           "model": "ollama/qwen2.5:7b",
           "color": "#F5C842",
           "icon": "👑",
-          "persona": "You are the Chairman. Synthesize the council into a decisive summary with concrete next steps."
+          "persona": "You are the Chairman. Synthesize the council into a decisive summary with concrete next steps.",
+          "temperature": 0.10,
+          "top_p": 0.80
+        }
+      }
+    },
+    {
+      "id": "feather",
+      "label": "🪶 Featherweight (4GB–8GB RAM · Ultra-Light)",
+      "description": "Ultra-compact memory footprint (~2.5GB) for budget laptops, 4-8GB RAM machines, and fast local execution.",
+      "topic": "Quickly inspect the architecture brief. Identify any immediate showstopper bugs or memory leaks.",
+      "topic_placeholder": "Quickly inspect the architecture brief. Identify any immediate showstopper bugs or memory leaks.",
+      "deep_debate": false,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": false, "dynamic_swarm": false},
+      "sample_ids": ["architecture-brief"],
+      "sample_files": ["architecture_brief.md"],
+      "chairman_model": "ollama/qwen2.5:3b",
+      "config": {
+        "architect": {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:1.5b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Focus on simple, maintainable structure without bloat.",
+          "temperature": 0.20,
+          "top_p": 0.90
+        },
+        "security": {
+          "label": "Security Auditor",
+          "model": "ollama/qwen2.5:1.5b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Security Auditor. Focus on obvious injection risks and unsafe defaults.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "perf": {
+          "label": "Performance Eng",
+          "model": "ollama/qwen2.5:1.5b",
+          "color": "#00FF00",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on fast execution and minimal RAM usage.",
+          "temperature": 0.30,
+          "top_p": 0.95
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/qwen2.5:3b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Deliver a crisp, concise verdict with top 3 action items.",
+          "temperature": 0.10,
+          "top_p": 0.80
+        }
+      }
+    },
+    {
+      "id": "balanced",
+      "label": "⚡ Balanced Consumer (8GB–16GB RAM · Resident 7B)",
+      "description": "Zero-thrash architecture for 8-16GB developer machines using resident 7B/8B models with persona diversity.",
+      "topic": "Perform an architectural and reliability review of this system. Critique trade-offs and suggest improvements.",
+      "topic_placeholder": "Perform an architectural and reliability review of this system. Critique trade-offs and suggest improvements.",
+      "deep_debate": false,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": false, "dynamic_swarm": false},
+      "sample_ids": ["architecture-brief"],
+      "sample_files": ["architecture_brief.md"],
+      "chairman_model": "ollama/qwen2.5:7b",
+      "config": {
+        "architect": {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Focus on SOLID design, loose coupling, and maintainability.",
+          "temperature": 0.25,
+          "top_p": 0.90
+        },
+        "security": {
+          "label": "Security Auditor",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Security Auditor. Focus on vulnerability surface, input sanitation, and defense-in-depth.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "perf": {
+          "label": "Performance Eng",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#00FF00",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on memory allocation, latency, and context budgeting.",
+          "temperature": 0.35,
+          "top_p": 0.95
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Synthesize peer analyses into a definitive Go/No-Go verdict.",
+          "temperature": 0.10,
+          "top_p": 0.80
+        }
+      }
+    },
+    {
+      "id": "pro_diverse",
+      "label": "🚀 Pro Workstation (24GB–32GB RAM · Multi-Model Diverse)",
+      "description": "True multi-model epistemic debate running diverse open-weight architectures (Meta Llama + Google Gemma + Mistral) in parallel.",
+      "topic": "Conduct a rigorous multi-model technical audit. Debate architectural bottlenecks, security vulnerabilities, and system stability.",
+      "topic_placeholder": "Conduct a rigorous multi-model technical audit. Debate architectural bottlenecks, security vulnerabilities, and system stability.",
+      "deep_debate": true,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": true, "dynamic_swarm": false},
+      "sample_ids": ["architecture-brief", "demo-metrics"],
+      "sample_files": ["architecture_brief.md", "demo_metrics.json"],
+      "chairman_model": "ollama/qwen2.5:14b",
+      "config": {
+        "architect": {
+          "label": "Lead Architect",
+          "model": "ollama/llama3.1:8b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Lead Architect. Provide architectural critiques and structural design guidance.",
+          "temperature": 0.25,
+          "top_p": 0.90
+        },
+        "security": {
+          "label": "Security Auditor",
+          "model": "ollama/gemma2:9b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Security Auditor. Identify OWASP risks, permission flaws, and data leak hazards.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "perf": {
+          "label": "Performance Eng",
+          "model": "ollama/mistral:7b",
+          "color": "#00FF00",
+          "icon": "⚡",
+          "persona": "You are the Performance Engineer. Focus on cache utilization, concurrency hazards, and CPU/GPU bottlenecks.",
+          "temperature": 0.35,
+          "top_p": 0.95
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/qwen2.5:14b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Synthesize peer arguments from disparate architectures and deliver a master engineering verdict.",
+          "temperature": 0.10,
+          "top_p": 0.80
+        }
+      }
+    },
+    {
+      "id": "heavyweight",
+      "label": "🦖 Heavyweight Lab (64GB+ RAM · Deep Reasoning 32B-70B)",
+      "description": "Maximum reasoning depth and deep architectural synthesis for 64GB+ Mac Studio or high-VRAM GPU workstations.",
+      "topic": "Perform an exhaustive, deep-reasoning architectural and threat-model audit. Deliver mathematically sound, production-hardened recommendations.",
+      "topic_placeholder": "Perform an exhaustive, deep-reasoning architectural and threat-model audit. Deliver mathematically sound, production-hardened recommendations.",
+      "deep_debate": true,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": true, "dynamic_swarm": false},
+      "sample_ids": ["architecture-brief"],
+      "sample_files": ["architecture_brief.md"],
+      "chairman_model": "ollama/llama3.1:70b",
+      "config": {
+        "architect": {
+          "label": "Lead Architect",
+          "model": "ollama/qwen2.5:32b",
+          "color": "#4D6BFE",
+          "icon": "🐋",
+          "persona": "You are the Principal Architect. Provide deep, rigorous system designs and formal invariants.",
+          "temperature": 0.20,
+          "top_p": 0.90
+        },
+        "security": {
+          "label": "Security Auditor",
+          "model": "ollama/deepseek-r1:32b",
+          "color": "#FF4444",
+          "icon": "🛡️",
+          "persona": "You are the Senior Security Fellow. Perform formal threat modeling, exploit path analysis, and crypto verification.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "perf": {
+          "label": "Performance Eng",
+          "model": "ollama/qwen2.5:32b",
+          "color": "#00FF00",
+          "icon": "⚡",
+          "persona": "You are the Principal Performance Engineer. Analyze memory barriers, lock contention, and algorithmic bounds.",
+          "temperature": 0.30,
+          "top_p": 0.95
+        },
+        "chairman": {
+          "label": "Chairman",
+          "model": "ollama/llama3.1:70b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chairman. Deliver an authoritative, high-context synthesis covering all edge cases.",
+          "temperature": 0.10,
+          "top_p": 0.80
+        }
+      }
+    },
+    {
+      "id": "security_audit",
+      "label": "🛡️ Deep Security & Vulnerability Audit",
+      "description": "Specialized multi-persona security council focusing on OWASP Top 10, injection vectors, unsafe defaults, and blast radius.",
+      "topic": "Audit the attached code and architecture for security vulnerabilities, authentication/authorization flaws, and data leaks.",
+      "topic_placeholder": "Audit the attached code and architecture for security vulnerabilities, authentication/authorization flaws, and data leaks.",
+      "deep_debate": true,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": true, "dynamic_swarm": false},
+      "sample_ids": ["auth-code-review"],
+      "sample_files": ["auth_code_review.md"],
+      "chairman_model": "ollama/qwen2.5:7b",
+      "config": {
+        "architect": {
+          "label": "AppSec Specialist",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#FF4444",
+          "icon": "🔒",
+          "persona": "You are the Application Security Specialist. Audit for SQL/Command injection, SSRF, and input validation gaps.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "security": {
+          "label": "Cloud & IAM Auditor",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#C45D1A",
+          "icon": "🛡️",
+          "persona": "You are the Cloud & IAM Auditor. Inspect least-privilege enforcement, token lifecycles, and credential exposure.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "perf": {
+          "label": "Penetration Tester",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#9B51E0",
+          "icon": "🎯",
+          "persona": "You are the Offensive Penetration Tester. Probe for bypasses, edge-case race conditions, and denial-of-service vectors.",
+          "temperature": 0.25,
+          "top_p": 0.90
+        },
+        "chairman": {
+          "label": "Security Chairman",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Chief Information Security Officer (CISO). Synthesize security risks into an actionable remediation priority list.",
+          "temperature": 0.10,
+          "top_p": 0.80
         }
       }
     },
     {
       "id": "code",
-      "label": "Code Review",
-      "description": "Balanced preset for reviewing code, diffs, or design docs with stronger coding models.",
-      "topic": "Review the attached code and notes. Identify correctness risks, maintainability issues, and the highest-value refactors before a public demo.",
-      "topic_placeholder": "Review the attached code and notes. Identify correctness risks, maintainability issues, and the highest-value refactors before a public demo.",
+      "label": "💻 Code Review & Refactoring Council",
+      "description": "Balanced preset for reviewing code diffs, pull requests, or design docs with strong coding models.",
+      "topic": "Review the attached code. Identify correctness risks, maintainability issues, and the highest-value refactors before merging.",
+      "topic_placeholder": "Review the attached code. Identify correctness risks, maintainability issues, and the highest-value refactors before merging.",
       "deep_debate": true,
       "dynamic_swarm": false,
       "toggles": {"deep_debate": true, "dynamic_swarm": false},
       "sample_ids": ["code-review-request", "demo-metrics"],
       "sample_files": ["code_review_request.md", "demo_metrics.json"],
       "chairman_model": "ollama/qwen2.5:7b",
-      "seats": [
-        {
-          "label": "Lead Architect",
-          "model": "ollama/qwen2.5:7b",
-          "color": "#4D6BFE",
-          "icon": "🐋",
-          "persona": "You are the Lead Architect. Focus on modularity, coupling, and technical debt."
-        },
-        {
-          "label": "Code Reviewer",
-          "model": "ollama/llama3.1:8b",
-          "color": "#C45D1A",
-          "icon": "🧩",
-          "persona": "You are the Senior Code Reviewer. Focus on bugs, weak assumptions, and code quality."
-        },
-        {
-          "label": "Performance Eng",
-          "model": "ollama/gemma2:9b",
-          "color": "#00A76F",
-          "icon": "⚡",
-          "persona": "You are the Performance Engineer. Focus on inefficient workflows, context bloat, and runtime tradeoffs."
-        }
-      ],
       "config": {
         "architect": {
           "label": "Lead Architect",
           "model": "ollama/qwen2.5:7b",
           "color": "#4D6BFE",
           "icon": "🐋",
-          "persona": "You are the Lead Architect. Focus on modularity, coupling, and technical debt."
+          "persona": "You are the Lead Architect. Focus on modularity, coupling, and technical debt.",
+          "temperature": 0.25,
+          "top_p": 0.90
         },
         "security": {
           "label": "Code Reviewer",
           "model": "ollama/llama3.1:8b",
           "color": "#C45D1A",
           "icon": "🧩",
-          "persona": "You are the Senior Code Reviewer. Focus on bugs, weak assumptions, and code quality."
+          "persona": "You are the Senior Code Reviewer. Focus on bugs, weak assumptions, and code quality.",
+          "temperature": 0.20,
+          "top_p": 0.90
         },
         "perf": {
           "label": "Performance Eng",
           "model": "ollama/gemma2:9b",
-          "color": "#00A76F",
+          "color": "#00FF00",
           "icon": "⚡",
-          "persona": "You are the Performance Engineer. Focus on inefficient workflows, context bloat, and runtime tradeoffs."
+          "persona": "You are the Performance Engineer. Focus on inefficient workflows, context bloat, and runtime tradeoffs.",
+          "temperature": 0.35,
+          "top_p": 0.95
         },
         "chairman": {
           "label": "Chairman",
           "model": "ollama/qwen2.5:7b",
           "color": "#F5C842",
           "icon": "👑",
-          "persona": "You are the Chairman. Combine code-review findings into a strict go/no-go summary for a demo build."
+          "persona": "You are the Chairman. Combine code-review findings into a strict go/no-go summary for a pull request merge.",
+          "temperature": 0.10,
+          "top_p": 0.80
+        }
+      }
+    },
+    {
+      "id": "sre_reliability",
+      "label": "🧪 SRE & System Reliability Council",
+      "description": "Specialized council for high-concurrency systems, race-condition detection, chaos engineering, and incident response.",
+      "topic": "Evaluate this architecture for high availability, fault tolerance, cascading failure modes, and recovery procedures.",
+      "topic_placeholder": "Evaluate this architecture for high availability, fault tolerance, cascading failure modes, and recovery procedures.",
+      "deep_debate": true,
+      "dynamic_swarm": false,
+      "toggles": {"deep_debate": true, "dynamic_swarm": false},
+      "sample_ids": ["kubernetes-incident"],
+      "sample_files": ["kubernetes_incident.md"],
+      "chairman_model": "ollama/qwen2.5:7b",
+      "config": {
+        "architect": {
+          "label": "SRE Commander",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#4D6BFE",
+          "icon": "🚨",
+          "persona": "You are the Site Reliability Engineer (SRE). Audit for single points of failure, failover gaps, and retry storms.",
+          "temperature": 0.20,
+          "top_p": 0.90
+        },
+        "security": {
+          "label": "Concurrency Specialist",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#FF4444",
+          "icon": "🔀",
+          "persona": "You are the Concurrency & Async Specialist. Look for race conditions, deadlocks, and unhandled task cancellations.",
+          "temperature": 0.15,
+          "top_p": 0.85
+        },
+        "perf": {
+          "label": "Observability Lead",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#00FF00",
+          "icon": "📈",
+          "persona": "You are the Observability Lead. Focus on metrics instrumentation, health check efficacy, and alerting thresholds.",
+          "temperature": 0.30,
+          "top_p": 0.95
+        },
+        "chairman": {
+          "label": "Reliability Chairman",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#F5C842",
+          "icon": "👑",
+          "persona": "You are the Reliability Chairman. Synthesize failure modes and produce a hardened disaster recovery playbook.",
+          "temperature": 0.10,
+          "top_p": 0.80
         }
       }
     },
     {
       "id": "image",
-      "label": "Product Review",
-      "description": "Preset for product notes, mockup descriptions, or demo prep (text-based; add a vision model to enable image analysis).",
-      "topic": "Review the attached product notes and demo materials. Assess clarity, usability, and what should change before showing this to users.",
-      "topic_placeholder": "Review the attached product notes and demo materials. Assess clarity, usability, and what should change before showing this to users.",
+      "label": "🖼️ Product & UX Design Review",
+      "description": "Preset for product notes, mockup critiques, visual hierarchy, and user trust analysis.",
+      "topic": "Review the attached product notes and demo materials. Assess usability, clarity, visual hierarchy, and friction points before launch.",
+      "topic_placeholder": "Review the attached product notes and demo materials. Assess usability, clarity, visual hierarchy, and friction points before launch.",
       "deep_debate": false,
       "dynamic_swarm": false,
       "toggles": {"deep_debate": false, "dynamic_swarm": false},
       "sample_ids": ["product-demo-notes"],
       "sample_files": ["product_demo_notes.md"],
       "chairman_model": "ollama/qwen2.5:7b",
-      "seats": [
-        {
-          "label": "UX Strategist",
-          "model": "ollama/qwen2.5:7b",
-          "color": "#4D6BFE",
-          "icon": "🖼️",
-          "persona": "You are the UX Strategist. Focus on visual hierarchy, product clarity, and trust signals."
-        },
-        {
-          "label": "Risk Reviewer",
-          "model": "ollama/gemma2:9b",
-          "color": "#FF4444",
-          "icon": "🛡️",
-          "persona": "You are the Risk Reviewer. Focus on misleading UI, unsafe user actions, and confidence gaps."
-        },
-        {
-          "label": "Demo Coach",
-          "model": "ollama/llama3.1:8b",
-          "color": "#00A76F",
-          "icon": "🎬",
-          "persona": "You are the Demo Coach. Focus on what will land in a live demo and what will confuse the audience."
-        }
-      ],
       "config": {
         "architect": {
           "label": "UX Strategist",
           "model": "ollama/qwen2.5:7b",
           "color": "#4D6BFE",
           "icon": "🖼️",
-          "persona": "You are the UX Strategist. Focus on visual hierarchy, product clarity, and trust signals."
+          "persona": "You are the UX Strategist. Focus on visual hierarchy, user journey clarity, and trust signals.",
+          "temperature": 0.25,
+          "top_p": 0.90
         },
         "security": {
           "label": "Risk Reviewer",
-          "model": "ollama/gemma2:9b",
+          "model": "ollama/qwen2.5:7b",
           "color": "#FF4444",
           "icon": "🛡️",
-          "persona": "You are the Risk Reviewer. Focus on misleading UI, unsafe user actions, and confidence gaps."
+          "persona": "You are the Risk Reviewer. Focus on misleading UI states, friction points, and unsafe defaults.",
+          "temperature": 0.15,
+          "top_p": 0.85
         },
         "perf": {
-          "label": "Demo Coach",
-          "model": "ollama/llama3.1:8b",
-          "color": "#00A76F",
+          "label": "Product Coach",
+          "model": "ollama/qwen2.5:7b",
+          "color": "#00FF00",
           "icon": "🎬",
-          "persona": "You are the Demo Coach. Focus on what will land in a live demo and what will confuse the audience."
+          "persona": "You are the Product Coach. Focus on demo-readiness, onboarding clarity, and user delight.",
+          "temperature": 0.35,
+          "top_p": 0.95
         },
         "chairman": {
-          "label": "Chairman",
+          "label": "Product Chairman",
           "model": "ollama/qwen2.5:7b",
           "color": "#F5C842",
           "icon": "👑",
-          "persona": "You are the Chairman. Produce a concise verdict on whether the product is demo-ready and what to change first."
+          "persona": "You are the Product Chairman. Synthesize UX and product feedback into a clear priority list for launch.",
+          "temperature": 0.10,
+          "top_p": 0.80
         }
       }
     }
@@ -216,6 +477,20 @@
       "description": "Focused request for a code review style council run."
     },
     {
+      "id": "auth-code-review",
+      "label": "Auth Security Audit",
+      "filename": "auth_code_review.md",
+      "content_type": "text/markdown",
+      "description": "Authentication and session token review request for security audits."
+    },
+    {
+      "id": "kubernetes-incident",
+      "label": "Kubernetes Incident Postmortem",
+      "filename": "kubernetes_incident.md",
+      "content_type": "text/markdown",
+      "description": "Production outage brief for SRE and reliability review."
+    },
+    {
       "id": "demo-metrics",
       "label": "Demo Metrics JSON",
       "filename": "demo_metrics.json",
@@ -227,7 +502,7 @@
       "label": "Product Demo Notes",
       "filename": "product_demo_notes.md",
       "content_type": "text/markdown",
-      "description": "Visual demo checklist and notes to pair with an uploaded screenshot."
+      "description": "Visual demo checklist and notes for product review."
     }
   ]
 }
