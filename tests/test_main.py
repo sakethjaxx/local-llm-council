@@ -1,6 +1,8 @@
 import importlib
+import asyncio
 import os
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -22,7 +24,11 @@ def _install_test_stubs():
         dotenv_stub.load_dotenv = lambda *args, **kwargs: None
         sys.modules["dotenv"] = dotenv_stub
 
-    if "fastapi" not in sys.modules:
+    # Other collected test modules can import a dependency that imports FastAPI
+    # first. These direct unit tests intentionally exercise route functions
+    # with lightweight fakes, so install their boundary stubs deterministically
+    # instead of making their behavior depend on collection order.
+    if "main" not in sys.modules:
         fastapi_stub = types.ModuleType("fastapi")
 
         class FakeFastAPI:
@@ -153,6 +159,14 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "ok")
         self.assertEqual(set(body.keys()), {"status"})
 
+    async def test_background_task_completion_ignores_cancellation(self):
+        task = asyncio.create_task(asyncio.sleep(60))
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        main._consume_background_task(task)
+
     async def test_status_reports_operational_detail(self):
         body = await main.status()
 
@@ -182,6 +196,55 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             body = await main.ollama_status()
         self.assertEqual(body["ready"], True)
         self.assertEqual(body["required"], ["qwen2.5:7b"])
+
+    async def test_models_catalog_endpoint_delegates_to_hardware_detect(self):
+        fake_catalog = {"ram_gb": 32.0, "budget_gb": 22.0, "models": []}
+        with patch.object(main, "get_model_catalog", return_value=fake_catalog):
+            body = await main.models_catalog()
+        self.assertEqual(body, fake_catalog)
+
+    async def test_project_review_records_failed_run_when_models_are_missing(self):
+        graph = {"stats": {"files": 1}, "nodes": [{"id": "app.py"}], "review_input": "Review app"}
+        missing = {"ready": False, "missing": ["qwen2.5:7b"], "installed": [], "required": ["qwen2.5:7b"]}
+        request = main.ReviewProjectRequest(path=tempfile.gettempdir())
+
+        with patch.object(main, "get_project_code_graph", return_value=graph), \
+             patch.object(main, "_pick_top_files", return_value=["app.py"]), \
+             patch.object(main, "_read_files_as_attachments", return_value=[{"filename": "app.py", "kind": "text", "text": "x"}]), \
+             patch.object(main, "ensure_models_for_config", return_value=missing), \
+             patch.object(main.metrics_store, "start_run", return_value="project-run"), \
+             patch.object(main.metrics_store, "finish_run") as finish_run:
+            response = await main.review_project(request, self.empty_request)
+            payload = await self._read_stream(response)
+
+        self.assertIn("Missing models", payload)
+        finish_run.assert_called_once_with(
+            "project-run", status="failed", error="Missing Ollama models: qwen2.5:7b"
+        )
+
+    async def test_hardware_suggestion_forwards_requested_roster_strategy(self):
+        expected = {"strategy": "mixed", "config": {}}
+        with patch.object(main, "get_hardware_suggestion", return_value=expected) as suggest:
+            body = await main.hardware_suggest(strategy="mixed")
+        self.assertEqual(body, expected)
+        suggest.assert_called_once_with(strategy="mixed")
+
+    async def test_models_pull_stream_rejects_unknown_tag(self):
+        with self.assertRaises(main.HTTPException) as ctx:
+            await main.models_pull_stream(tag="not-a-real-model:1b")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    async def test_models_pull_stream_streams_known_tag(self):
+        async def fake_pull_stream(tag):
+            yield {"type": "line", "text": "pulling manifest"}
+            yield {"type": "done", "success": True, "returncode": 0}
+
+        with patch.object(main, "pull_model_stream", new=fake_pull_stream):
+            response = await main.models_pull_stream(tag="qwen2.5:7b")
+            payload = await self._read_stream(response)
+
+        self.assertIn('"pulling manifest"', payload)
+        self.assertIn('"success": true', payload)
 
     async def test_council_stream_emits_run_started_and_done(self):
         async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
@@ -310,7 +373,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("data", captured["attachments"][1])
         self.assertEqual(captured["profile"], "balanced")
 
-    async def test_council_stream_falls_back_when_swarm_models_are_missing(self):
+    async def test_council_stream_keeps_hardware_models_when_swarm_personas_are_generated(self):
         ready_status = {
             "provider": "ollama",
             "required": ["qwen2.5:7b"],
@@ -320,16 +383,6 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             "ready": True,
             "auto_pull_enabled": False,
         }
-        routed_missing_status = {
-            "provider": "ollama",
-            "required": ["qwen2.5:7b", "gemma2:9b"],
-            "installed": ["qwen2.5:7b"],
-            "missing": ["gemma2:9b"],
-            "pulled": [],
-            "ready": False,
-            "auto_pull_enabled": False,
-        }
-
         captured = {}
 
         async def fake_run(self, topic_text, attachments, custom_config=None, deep_debate=False, run_id=None, token_budget_profile=None):
@@ -337,7 +390,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             captured["profile"] = token_budget_profile
             yield {"type": "done"}
 
-        with patch.object(main, "ensure_models_for_config", side_effect=[ready_status, routed_missing_status, ready_status]), \
+        with patch.object(main, "ensure_models_for_config", return_value=ready_status), \
              patch("router_agent.generate_swarm", return_value={
                  "architect": {"label": "A", "model": "ollama/qwen2.5:7b", "color": "#111", "icon": "A", "persona": "a"},
                  "security": {"label": "S", "model": "ollama/gemma2:9b", "color": "#222", "icon": "S", "persona": "s"},
@@ -348,9 +401,9 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             payload = await self._read_stream(response)
 
         self.assertIn('"type": "swarm_routed"', payload)
-        self.assertIn('Dynamic Swarm selected models that are not installed. Falling back to the stable demo roster.', payload)
         self.assertIn("architect", captured["config"])
-        self.assertEqual(captured["config"]["architect"]["label"], "Lead Architect")
+        self.assertEqual(captured["config"]["architect"]["label"], "A")
+        self.assertEqual(captured["config"]["architect"]["model"], "ollama/qwen2.5:7b")
         self.assertEqual(captured["profile"], "balanced")
 
     async def test_council_stream_warns_and_falls_back_when_swarm_generation_fails(self):
@@ -376,7 +429,7 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
             response = await main.council_stream(self.empty_request, topic_text="route me", dynamic_swarm=True)
             payload = await self._read_stream(response)
 
-        self.assertIn('Dynamic Swarm failed. Falling back to the stable demo roster.', payload)
+        self.assertIn('Dynamic Swarm failed. Keeping the selected roster and personas.', payload)
         self.assertEqual(seen["label"], "Lead Architect")
         self.assertEqual(seen["profile"], "balanced")
 
@@ -549,11 +602,37 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"COUNCIL_PROJECT_ROOT": "/home/user/local-llm-council"}):
             # A path inside the root is allowed.
             ok = main._confine_to_project_root("/home/user/local-llm-council/main.py")
-            self.assertTrue(ok.startswith("/home/user/local-llm-council"))
+            self.assertTrue(ok.startswith(os.path.realpath("/home/user/local-llm-council")))
             # An escape is rejected with 403.
             with self.assertRaises(HTTPException) as ctx:
                 main._confine_to_project_root("/etc/passwd")
             self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_confine_to_project_root_blocks_symlink_escape(self):
+        from fastapi import HTTPException
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            escaped = os.path.join(root, "outside-link")
+            os.symlink(outside, escaped)
+            with patch.dict(os.environ, {"COUNCIL_PROJECT_ROOT": root}):
+                with self.assertRaises(HTTPException) as ctx:
+                    main._confine_to_project_root(escaped)
+            self.assertEqual(ctx.exception.status_code, 403)
+
+    async def test_ingest_folder_endpoint_confines_path_and_clamps_file_count(self):
+        with patch.dict(os.environ, {"COUNCIL_PROJECT_ROOT": "/home/user/local-llm-council"}):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main.ingest_local_folder(
+                    main.FolderIngestRequest(folder_path="/etc", max_files=3)
+                )
+            self.assertEqual(ctx.exception.status_code, 403)
+
+        with patch.object(main, "ingest_folder", return_value=[]) as ingest:
+            await main.ingest_local_folder(
+                main.FolderIngestRequest(folder_path=".", max_files=999)
+            )
+        self.assertEqual(ingest.call_args.args[1], 200)
 
     def test_reject_if_overloaded_returns_429(self):
         from fastapi import HTTPException

@@ -76,6 +76,22 @@ class IOParserTests(unittest.TestCase):
             self.assertIn("config.json", filenames)
             self.assertNotIn(".git/HEAD", filenames)
 
+    def test_ingest_folder_skips_secret_bearing_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text("DB_PASSWORD=hunter2", encoding="utf-8")
+            (root / ".env.local").write_text("API_TOKEN=abc123", encoding="utf-8")
+            (root / "app.py").write_text('print("hi")', encoding="utf-8")
+
+            attachments = ingest_folder(str(root))
+            names = [attachment["filename"] for attachment in attachments]
+            prompt = format_attachments_for_prompt(attachments)
+
+            self.assertNotIn(".env", names)
+            self.assertNotIn(".env.local", names)
+            self.assertIn("app.py", names)
+            self.assertNotIn("hunter2", prompt)
+
     def test_is_safe_url(self):
         self.assertFalse(_is_safe_url("ftp://example.com"))
         self.assertFalse(_is_safe_url("http://localhost:8000"))

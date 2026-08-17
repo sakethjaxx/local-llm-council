@@ -59,6 +59,39 @@ class InputAndRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("architect", swarm)
         self.assertEqual(swarm["architect"]["model"], "ollama/qwen2.5:7b")
 
+    async def test_generate_swarm_only_capability_routes_to_available_models(self):
+        async def fake_acompletion(**kwargs):
+            return _FakeResponse(
+                '{"experts": {"code": {"label": "Code Engineer", "model": "ollama/qwen2.5:7b", "color": "#111111", "icon": "C", "persona": "review code"}}}'
+            )
+
+        with patch.object(router_agent.litellm, "acompletion", side_effect=fake_acompletion):
+            swarm = await router_agent.generate_swarm(
+                "review architecture",
+                "ollama/qwen2.5:7b",
+                available_models=["ollama/qwen2.5:7b", "ollama/qwen2.5-coder:7b"],
+            )
+
+        self.assertEqual(swarm["code"]["model"], "ollama/qwen2.5-coder:7b")
+
+    def test_apply_personas_to_roster_preserves_hardware_fitted_models(self):
+        roster = {
+            "architect": {"label": "Architect", "model": "ollama/qwen2.5:3b", "persona": "base", "color": "#111", "icon": "A"},
+            "security": {"label": "Security", "model": "ollama/llama3.2:3b", "persona": "base", "color": "#222", "icon": "S"},
+            "chairman": {"label": "Chairman", "model": "ollama/qwen2.5:14b", "persona": "chair", "color": "#333", "icon": "C"},
+        }
+        personas = {
+            "code": {"label": "Code Reviewer", "model": "ollama/qwen2.5-coder:14b", "persona": "review code", "color": "#abc", "icon": "R"},
+            "risk": {"label": "Risk Analyst", "model": "ollama/deepseek-r1:32b", "persona": "find risks", "color": "#def", "icon": "!"},
+        }
+
+        routed = router_agent.apply_personas_to_roster(roster, personas)
+
+        self.assertEqual(routed["architect"]["model"], "ollama/qwen2.5:3b")
+        self.assertEqual(routed["security"]["model"], "ollama/llama3.2:3b")
+        self.assertEqual(routed["chairman"], roster["chairman"])
+        self.assertEqual(routed["architect"]["label"], "Code Reviewer")
+
 
 if __name__ == "__main__":
     unittest.main()

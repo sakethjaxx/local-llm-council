@@ -1,0 +1,901 @@
+"""
+LLM Council - Local multi-model decision engine
+FastAPI backend with SSE streaming for real-time council progress
+"""
+
+import asyncio
+import base64
+import copy
+import io
+import json
+import os
+import pathlib
+import signal
+import zipfile
+from contextlib import asynccontextmanager
+from typing import List, Literal, Optional
+
+import httpx
+from pydantic import BaseModel
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+
+from demo_catalog import get_demo_catalog, load_presets
+from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES, normalize_token_budget_profile
+from cloud_keys import extract_cloud_keys, scoped_cloud_keys
+from hardware_detect import get_default_council_config, get_hardware_suggestion, get_model_catalog
+from graph_exporter import export_to_graph_json
+from io_parser import format_attachments_for_prompt, ingest_folder, parse_uploaded_file
+from logging_utils import get_logger
+from memory_store import memory_store
+from metrics_store import metrics_store
+from ollama_manager import auto_pull_enabled, ensure_models_for_config, pull_model_stream
+from orchestrator import CouncilOrchestrator
+from provider_caps import MODELS as PROVIDER_MODELS, redact_config, supports_image_input
+from project_graph import get_project_code_graph
+from run_store import DB_PATH as RUN_DB_PATH, run_store
+from shutdown_state import active_stream_count, clear_shutdown_request, is_shutdown_requested, request_shutdown, track_active_stream, wait_for_active_streams
+from skill_registry import skill_registry
+
+load_dotenv()
+logger = get_logger(__name__)
+APP_DIR = pathlib.Path(__file__).resolve().parent
+
+
+def _is_localhost(host: str) -> bool:
+    return host.strip().lower() in {"127.0.0.1", "localhost"}
+
+
+def verify_api_key(x_api_key: str = Header(None)) -> None:
+    expected_api_key = os.getenv("COUNCIL_API_KEY", "").strip()
+    if not expected_api_key:
+        return
+    if x_api_key != expected_api_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_api_key(x_api_key: str = Header(None)) -> None:
+    expected_api_key = os.getenv("COUNCIL_API_KEY", "").strip()
+    if not expected_api_key:
+        raise HTTPException(status_code=403, detail="COUNCIL_API_KEY is required for this endpoint")
+    if x_api_key != expected_api_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _handle_sigterm(signum, frame):
+    del signum, frame
+    request_shutdown()
+
+
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+except (ValueError, AttributeError):
+    pass
+
+
+def _consume_background_task(task: asyncio.Task) -> None:
+    """Retrieve a maintenance-task error without raising on cancellation."""
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        return
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    del app
+    clear_shutdown_request()
+    # Startup maintenance — fire-and-forget, but swallow exceptions so a failing
+    # background task doesn't spam "Task exception was never retrieved".
+    for coro in (
+        asyncio.to_thread(memory_store.rebuild_embeddings),
+        asyncio.to_thread(memory_store.prune_memory),
+        asyncio.to_thread(skill_registry.deduplicate_skills),
+    ):
+        t = asyncio.create_task(coro)
+        t.add_done_callback(_consume_background_task)
+    yield
+    # Drain on ANY shutdown (SIGINT/Ctrl-C, SIGTERM, or normal exit), not only
+    # SIGTERM. Signal in-flight streams to wind down, then wait briefly for them.
+    request_shutdown()
+    await asyncio.to_thread(wait_for_active_streams, 10.0, 0.1)
+
+
+app = FastAPI(
+    title="LLM Council",
+    version="1.0.0",
+    lifespan=lifespan,
+    dependencies=[Depends(verify_api_key)],
+)
+
+
+def _allowed_origins() -> list[str]:
+    configured = os.getenv("COUNCIL_CORS_ORIGINS", "").strip()
+    if not configured:
+        return ["http://localhost:8765", "http://127.0.0.1:8765"]
+    if configured == "*":
+        return ["*"]
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+
+def _feature_flags() -> dict:
+    return {
+        "python_tool_enabled": os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() == "true",
+        "metrics_file": os.getenv("COUNCIL_METRICS_FILE", "data/council_metrics.jsonl"),
+        "cors_origins": _allowed_origins(),
+        "default_provider": "ollama",
+        "default_mode": "free-local-open-weights",
+        "auto_pull_local_models": auto_pull_enabled(),
+        "token_budget_profiles": list(TOKEN_BUDGET_PROFILES.keys()),
+        "default_token_budget_profile": DEFAULT_TOKEN_BUDGET_PROFILE,
+    }
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _request_cloud_keys(request: Request | None) -> dict[str, str]:
+    if request is None:
+        return {}
+    return extract_cloud_keys(getattr(request, "headers", {}) or {})
+
+
+def _shutdown_event_payload() -> dict:
+    return {"type": "shutdown", "message": "Server shutdown requested. Active stream is closing."}
+
+
+# Max concurrent SSE council runs — bounds resource/cost exhaustion on an exposed
+# instance. A constant, not a knob (edit if your hardware runs more in parallel).
+MAX_CONCURRENT_STREAMS = 8
+
+
+def _reject_if_overloaded() -> None:
+    if active_stream_count() >= MAX_CONCURRENT_STREAMS:
+        raise HTTPException(status_code=429, detail="Server busy: too many concurrent council runs")
+
+
+def _confine_to_project_root(candidate: str) -> str:
+    """Resolve a caller-supplied path. If COUNCIL_PROJECT_ROOT env var is set,
+    confines execution to that directory tree for security."""
+    # Resolve symlinks before comparing paths: an in-root symlink can otherwise
+    # point outside COUNCIL_PROJECT_ROOT and bypass the intended sandbox.
+    resolved = os.path.realpath(candidate)
+    allowed_root = os.getenv("COUNCIL_PROJECT_ROOT")
+    if allowed_root:
+        root = os.path.realpath(allowed_root)
+        if resolved != root and not resolved.startswith(root + os.sep):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Path is outside the allowed COUNCIL_PROJECT_ROOT: {root}"
+            )
+    return resolved
+
+
+def _metrics_run_for_export(run_id: str) -> dict:
+    for run in metrics_store.list_runs(limit=500):
+        if run.get("run_id") == run_id:
+            return redact_config(run)
+    return {}
+
+
+def _render_run_markdown(run: dict, metrics: dict) -> str:
+    lines = [
+        "# Council Run Export",
+        "",
+        f"Run ID: {run.get('run_id', '')}",
+        f"Status: {run.get('status', '')}",
+        "",
+        "## Topic",
+        run.get("topic", ""),
+        "",
+    ]
+
+    chairman_phase = next(
+        (
+            phase
+            for phase in run.get("phases", [])
+            if phase.get("phase") == 3 and phase.get("member_id") == "chairman"
+        ),
+        None,
+    )
+    if chairman_phase:
+        lines.extend([
+            "## Chairman Verdict",
+            chairman_phase.get("output", ""),
+            "",
+        ])
+
+    for phase in run.get("phases", []):
+        seat = (run.get("roster") or {}).get(phase.get("member_id"), {})
+        label = seat.get("label") or phase.get("member_id", "unknown")
+        lines.extend([
+            f"## Phase {phase.get('phase')} — {label}",
+            "",
+            phase.get("output", ""),
+            "",
+        ])
+
+    if run.get("feedback"):
+        lines.append("## Feedback")
+        lines.append("")
+        for item in run["feedback"]:
+            lines.append(
+                f"- Action {item.get('action_index')}: {item.get('rating')} {item.get('note', '').strip()}".rstrip()
+            )
+        lines.append("")
+
+    if metrics:
+        lines.extend([
+            "## Metrics",
+            "",
+            json.dumps(metrics, indent=2),
+            "",
+        ])
+
+    return "\n".join(lines)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins(),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+app.mount("/demo-samples", StaticFiles(directory=APP_DIR / "demo_samples"), name="demo-samples")
+
+
+class FolderIngestRequest(BaseModel):
+    folder_path: str
+    max_files: Optional[int] = 50
+
+
+@app.post("/ingest/folder")
+async def ingest_local_folder(payload: FolderIngestRequest):
+    """
+    Bulk ingest a local folder path, returning parsed attachments and formatted prompt text.
+    """
+    if not payload.folder_path:
+        raise HTTPException(status_code=400, detail="folder_path is required")
+    root = _confine_to_project_root(payload.folder_path)
+    if not os.path.exists(root) or not os.path.isdir(root):
+        raise HTTPException(status_code=404, detail=f"Folder not found or is not a directory: {payload.folder_path}")
+    max_files = max(1, min(payload.max_files or 50, 200))
+    attachments = await asyncio.to_thread(ingest_folder, root, max_files)
+    formatted = format_attachments_for_prompt(attachments)
+    return {
+        "file_count": len(attachments),
+        "attachments": attachments,
+        "formatted_prompt_text": formatted,
+    }
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
+
+
+
+@app.post("/council/stream")
+async def council_stream(
+    request: Request,
+    topic_text: str = Form(""),
+    council_config: str = Form(None),
+    token_budget_profile: str = Form(DEFAULT_TOKEN_BUDGET_PROFILE),
+    dynamic_swarm: bool = Form(False),
+    deep_debate: bool = Form(False),
+    attachments: Optional[list[UploadFile]] = File(None),
+):
+    """
+    SSE endpoint — streams council events as they happen.
+    """
+    _reject_if_overloaded()
+    max_files = _int_env("COUNCIL_MAX_FILES", 10)
+    max_upload_mb = _int_env("COUNCIL_MAX_UPLOAD_MB", 20)
+    max_upload_bytes = max_upload_mb * 1024 * 1024
+    max_total_upload_bytes = 50 * 1024 * 1024
+
+    if len(attachments or []) > max_files:
+        raise HTTPException(status_code=400, detail=f"Max {max_files} attachments per run")
+
+    parsed_attachments: list[dict] = []
+    total_upload_bytes = 0
+    for upload in attachments or []:
+        if not upload or not upload.filename:
+            continue
+        raw = await upload.read(max_upload_bytes + 1)
+        if len(raw) > max_upload_bytes:
+            raise HTTPException(status_code=400, detail=f"File {upload.filename} exceeds {max_upload_mb}MB limit")
+        total_upload_bytes += len(raw)
+        if total_upload_bytes > max_total_upload_bytes:
+            raise HTTPException(status_code=400, detail="Total attachment size exceeds 50MB limit")
+        parsed = parse_uploaded_file(upload.filename, upload.content_type or "application/octet-stream", raw)
+        if parsed.get("kind") == "image":
+            parsed["data"] = base64.b64encode(raw).decode()
+        parsed_attachments.append(parsed)
+
+    config_dict = None
+    config_parse_error = None
+    if council_config:
+        try:
+            config_dict = json.loads(council_config)
+        except (json.JSONDecodeError, ValueError) as exc:
+            config_parse_error = str(exc)
+            logger.warning("council_config_parse_failed", extra={"error": config_parse_error})
+
+    async def event_generator():
+        with track_active_stream():
+            request_cloud_keys = _request_cloud_keys(request)
+            resolved_budget_profile = normalize_token_budget_profile(token_budget_profile)
+            cfg = copy.deepcopy(config_dict or get_default_council_config())
+            run_id = metrics_store.start_run(
+                "council",
+                {
+                    "deep_debate": deep_debate,
+                    "dynamic_swarm": dynamic_swarm,
+                    "attachment_count": len(parsed_attachments),
+                    "token_budget_profile": resolved_budget_profile,
+                },
+            )
+            with scoped_cloud_keys(request_cloud_keys):
+                if is_shutdown_requested():
+                    yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                    return
+                model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
+                yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                if config_parse_error:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'Invalid council_config JSON — using default roster. (' + config_parse_error + ')'})}\n\n"
+                yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
+                if not model_status["ready"]:
+                    metrics_store.finish_run(
+                        run_id,
+                        status="failed",
+                        error="Missing Ollama models: " + ", ".join(model_status["missing"]),
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Missing Ollama models: ' + ', '.join(model_status['missing'])})}\n\n"
+                    return
+                if dynamic_swarm:
+                    from router_agent import apply_personas_to_roster, generate_swarm
+                    yield f"data: {json.dumps({'type': 'phase_start', 'phase': 0, 'label': 'Dynamic Swarm Routing'})}\n\n"
+                    base_model = cfg.get("chairman", {}).get("model", "ollama/qwen2.5:7b")
+                    attachment_hints = "\n".join(
+                        f"- {item.get('filename', 'attachment')}: "
+                        f"{str(item.get('summary') or item.get('text') or '')[:240]}"
+                        for item in parsed_attachments
+                    )
+                    routing_context = topic_text
+                    if attachment_hints:
+                        routing_context += f"\n\nAttached-context summaries:\n{attachment_hints}"
+                    new_personas = await generate_swarm(routing_context, base_model)
+                    if new_personas:
+                        cfg = apply_personas_to_roster(cfg, new_personas)
+                        yield f"data: {json.dumps({'type': 'swarm_routed', 'config': redact_config(cfg)})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Dynamic Swarm failed. Keeping the selected roster and personas.'})}\n\n"
+
+                orchestrator = CouncilOrchestrator()
+                try:
+                    async for event in orchestrator.run(
+                        topic_text,
+                        parsed_attachments,
+                        cfg,
+                        deep_debate,
+                        run_id=run_id,
+                        token_budget_profile=resolved_budget_profile,
+                    ):
+                        if event.get("type") == "shutdown":
+                            yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                            return
+                        yield f"data: {json.dumps(redact_config(event))}\n\n"
+                        await asyncio.sleep(0)  # yield to event loop
+                except Exception as e:
+                    metrics_store.finish_run(run_id, status="failed", error=str(e))
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    member_id: str
+    messages: List[ChatMessage]
+    council_config: Optional[dict] = None
+    token_budget_profile: str = DEFAULT_TOKEN_BUDGET_PROFILE
+
+
+class ConfigCheckRequest(BaseModel):
+    council_config: Optional[dict] = None
+    attachment_names: List[str] = []
+
+
+class FeedbackRequest(BaseModel):
+    action_index: int
+    # Constrained so an unknown rating is rejected with 422 by request validation
+    # (per SPEC P1-1) instead of silently persisting a junk value.
+    rating: Literal["thumbs_up", "thumbs_down", "ignored"]
+    note: str = ""
+
+@app.post("/council/chat")
+async def council_chat(req: ChatRequest, request: Request):
+    """
+    Interactive Debate Mode — stream a reply from a specific member
+    """
+    _reject_if_overloaded()
+    orchestrator = CouncilOrchestrator()
+    run_id = metrics_store.start_run("chat", {"member_id": req.member_id})
+    
+    async def chat_stream():
+        with track_active_stream():
+            request_cloud_keys = _request_cloud_keys(request)
+            resolved_budget_profile = normalize_token_budget_profile(req.token_budget_profile)
+            with scoped_cloud_keys(request_cloud_keys):
+                if is_shutdown_requested():
+                    yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                    return
+                yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                try:
+                    async for chunk in orchestrator.chat_with_member(
+                        req.member_id,
+                        req.messages,
+                        req.council_config,
+                        run_id=run_id,
+                        token_budget_profile=resolved_budget_profile,
+                    ):
+                        if is_shutdown_requested():
+                            yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                            return
+                        yield f"data: {json.dumps({'type': 'chat_token', 'chunk': chunk})}\n\n"
+                    yield f"data: {json.dumps({'type': 'chat_done'})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        chat_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+@app.get("/hardware/suggest")
+async def hardware_suggest(strategy: str = "auto"):
+    return get_hardware_suggestion(strategy=strategy)
+
+
+@app.get("/ollama/status")
+async def ollama_status():
+    return ensure_models_for_config(get_default_council_config(), auto_pull=False)
+
+
+@app.post("/ollama/check")
+async def ollama_check(req: ConfigCheckRequest):
+    cfg = copy.deepcopy(req.council_config or get_default_council_config())
+    status = ensure_models_for_config(cfg, auto_pull=False)
+    has_image_input = any(name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")) for name in req.attachment_names)
+    image_seats = [seat.get("label", seat_id) for seat_id, seat in cfg.items() if supports_image_input(seat.get("model", ""))]
+    warnings = []
+    if has_image_input and not image_seats:
+        warnings.append("Image attachments are selected, but no seat is using a known image-capable local model.")
+    if len(req.attachment_names) > 5:
+        warnings.append("Large attachment batches can slow the demo. Prefer 1-3 focused files.")
+    return {
+        **status,
+        "warnings": warnings,
+        "image_seats": image_seats,
+    }
+
+
+@app.post("/ollama/bootstrap")
+async def ollama_bootstrap():
+    return ensure_models_for_config(get_default_council_config(), auto_pull=True)
+
+
+_OLLAMA_TAG_WHITELIST = {
+    model_id.split("/", 1)[1]
+    for model_id, caps in PROVIDER_MODELS.items()
+    if caps.provider == "ollama"
+}
+
+
+@app.get("/models/catalog")
+async def models_catalog():
+    return await asyncio.to_thread(get_model_catalog)
+
+
+@app.get("/models/pull/stream")
+async def models_pull_stream(tag: str):
+    if tag not in _OLLAMA_TAG_WHITELIST:
+        raise HTTPException(status_code=400, detail=f"Unknown model tag: {tag}")
+
+    async def event_generator():
+        async for event in pull_model_stream(tag):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/council/memory")
+async def get_memory():
+    return memory_store.get_graph_data()
+
+
+@app.get("/memory-graph/export")
+async def export_memory_graph(project_name: str = "local-llm-council"):
+    """Export council memory graph as a portable knowledge-graph corpus document."""
+    triples = await asyncio.to_thread(memory_store.all_triples)
+    formatted_triples = [
+        {"subject": t.subject, "predicate": t.predicate, "object": t.object, "confidence": t.confidence}
+        for t in triples
+    ]
+    return export_to_graph_json(formatted_triples, corpus_name=project_name)
+
+
+DEFAULT_REVIEW_FILE_BUDGET = 25
+MAX_REVIEW_FILE_BUDGET = 120
+
+
+def _pick_top_files(graph_data: dict, k: int = DEFAULT_REVIEW_FILE_BUDGET) -> list[str]:
+    """Rank the project's files for review: dependency hubs first, then everything
+    else. `top_inbound`/`top_outbound` only cover the top few nodes, so falling
+    through to the full node list is what keeps a review from silently shrinking
+    to a handful of files on projects with a flat dependency graph."""
+    stats = graph_data.get("stats", {})
+    seen: set[str] = set()
+    result: list[str] = []
+
+    def take(path: str) -> bool:
+        if not path or path in seen:
+            return False
+        seen.add(path)
+        result.append(path)
+        return len(result) >= k
+
+    for item in stats.get("top_inbound", []) + stats.get("top_outbound", []):
+        path = item[0] if isinstance(item, (list, tuple)) else item.get("id", "")
+        if take(path):
+            return result
+
+    # Fill remaining budget from every known file, not just the isolated ones —
+    # otherwise a well-connected repo only ever ships its top hubs to the council.
+    for node in graph_data.get("nodes", []):
+        path = node.get("id", "") if isinstance(node, dict) else str(node)
+        if take(path):
+            return result
+
+    for iso in stats.get("isolated", []):
+        if take(iso):
+            return result
+
+    return result
+
+
+# Total source characters handed to the council for a project review. Split
+# across the selected files so raising the file budget widens coverage instead
+# of blowing past the context window of a small local model.
+REVIEW_CHAR_BUDGET = 120_000
+
+
+def _read_files_as_attachments(root: str, rel_paths: list[str]) -> list[dict]:
+    root_path = pathlib.Path(root).resolve()
+    attachments = []
+    per_file_cap = max(2_000, REVIEW_CHAR_BUDGET // max(1, len(rel_paths)))
+    for rel in rel_paths:
+        full = root_path / rel
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")[:per_file_cap]
+            attachments.append({
+                "kind": "text",
+                "filename": rel,
+                "content_type": "text/plain",
+                "text": text,
+                "summary": f"File: {rel}",
+            })
+        except Exception:
+            continue
+    return attachments
+
+
+class ReviewProjectRequest(BaseModel):
+    path: str = "."
+    deep_debate: bool = False
+    council_config: Optional[dict] = None
+    token_budget_profile: str = DEFAULT_TOKEN_BUDGET_PROFILE
+    max_files: int = DEFAULT_REVIEW_FILE_BUDGET
+
+
+@app.post("/council/review-project")
+async def review_project(req: ReviewProjectRequest, request: Request):
+    _reject_if_overloaded()
+    root = _confine_to_project_root(req.path)
+    if not os.path.isdir(root):
+        raise HTTPException(status_code=400, detail=f"Not a directory: {root}")
+
+    file_budget = max(1, min(req.max_files or DEFAULT_REVIEW_FILE_BUDGET, MAX_REVIEW_FILE_BUDGET))
+    graph_data = await asyncio.to_thread(get_project_code_graph, root)
+    top_files = _pick_top_files(graph_data, file_budget)
+    attachments = await asyncio.to_thread(_read_files_as_attachments, root, top_files)
+    if not attachments:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No readable source files found under {root}. "
+                "Check the path, or confirm the project contains supported source files."
+            ),
+        )
+    topic = graph_data.get("review_input", f"Review the project at: {root}")
+    cfg = copy.deepcopy(req.council_config or get_default_council_config())
+
+    async def event_generator():
+        with track_active_stream():
+            request_cloud_keys = _request_cloud_keys(request)
+            resolved_budget_profile = normalize_token_budget_profile(req.token_budget_profile)
+            run_id = metrics_store.start_run(
+                "project_review",
+                {
+                    "path": root,
+                    "files_selected": len(attachments),
+                    "deep_debate": req.deep_debate,
+                    "token_budget_profile": resolved_budget_profile,
+                },
+            )
+            with scoped_cloud_keys(request_cloud_keys):
+                if is_shutdown_requested():
+                    yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                    return
+                yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'project_info', 'path': root, 'files_selected': top_files, 'total_files': graph_data['stats']['files']})}\n\n"
+
+                model_status = await asyncio.to_thread(ensure_models_for_config, cfg, auto_pull_enabled())
+                yield f"data: {json.dumps({'type': 'model_status', **model_status})}\n\n"
+                if not model_status["ready"]:
+                    metrics_store.finish_run(
+                        run_id,
+                        status="failed",
+                        error="Missing Ollama models: " + ", ".join(model_status["missing"]),
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Missing models: ' + ', '.join(model_status['missing'])})}\n\n"
+                    return
+
+                orchestrator = CouncilOrchestrator()
+                try:
+                    async for event in orchestrator.run(
+                        topic,
+                        attachments,
+                        cfg,
+                        req.deep_debate,
+                        run_id=run_id,
+                        token_budget_profile=resolved_budget_profile,
+                    ):
+                        if event.get("type") == "shutdown":
+                            yield f"data: {json.dumps(_shutdown_event_payload())}\n\n"
+                            return
+                        yield f"data: {json.dumps(redact_config(event))}\n\n"
+                        await asyncio.sleep(0)
+                except Exception as e:
+                    metrics_store.finish_run(run_id, status="failed", error=str(e))
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/project/code-graph")
+async def project_code_graph(path: str = "."):
+    return await asyncio.to_thread(get_project_code_graph, _confine_to_project_root(path))
+
+
+@app.get("/demo/catalog")
+async def demo_catalog():
+    return get_demo_catalog()
+
+
+@app.get("/config/presets")
+async def config_presets():
+    return load_presets()
+
+
+@app.get("/runs")
+async def list_persisted_runs(limit: int = 50, fingerprint_hash: Optional[str] = None):
+    runs = await asyncio.to_thread(run_store.list_runs, limit, fingerprint_hash)
+    return {"runs": runs}
+
+
+@app.get("/skills")
+async def list_skills(limit: int = 50, domain: Optional[str] = None):
+    skills = await asyncio.to_thread(skill_registry.list_skills, limit, domain)
+    return {"skills": skills, "total": len(skills)}
+
+
+@app.get("/runs/{run_id}")
+async def get_persisted_run(run_id: str):
+    run = await asyncio.to_thread(run_store.get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    return run
+
+
+@app.get("/runs/{run_id}/export")
+async def export_persisted_run(run_id: str, format: str = "md"):
+    export_format = (format or "md").strip().lower()
+    run = redact_config(await asyncio.to_thread(run_store.get_run, run_id))
+    metrics = _metrics_run_for_export(run_id)
+
+    if not run:
+        return Response(
+            content=json.dumps({"error": "run_not_found", "run_id": run_id}),
+            media_type="application/json",
+            status_code=404,
+        )
+
+    markdown = _render_run_markdown(run, metrics)
+    payload = {"run": run, "metrics": metrics}
+
+    if export_format == "md":
+        return Response(
+            content=markdown,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.md"'},
+        )
+
+    if export_format == "json":
+        return Response(
+            content=json.dumps(payload, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.json"'},
+        )
+
+    if export_format == "zip":
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("report.md", markdown)
+            archive.writestr("run.json", json.dumps(run, indent=2))
+            archive.writestr("metrics.json", json.dumps(metrics, indent=2))
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.zip"'},
+        )
+
+    return Response(
+        content=json.dumps({"error": "unsupported_format", "format": export_format}),
+        media_type="application/json",
+        status_code=400,
+    )
+
+
+@app.delete("/runs/{run_id}")
+async def delete_persisted_run(run_id: str):
+    deleted = await asyncio.to_thread(run_store.delete_run, run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {"run_id": run_id, "deleted": deleted}
+
+
+@app.post("/runs/{run_id}/feedback")
+async def record_run_feedback(run_id: str, req: FeedbackRequest):
+    # Reject feedback for a run that does not exist instead of returning a false
+    # success — the underlying INSERT would fail the FK and be swallowed.
+    if not await asyncio.to_thread(run_store.run_exists, run_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    await asyncio.to_thread(run_store.record_feedback, run_id, req.action_index, req.rating, req.note)
+    return {"run_id": run_id, "action_index": req.action_index, "rating": req.rating, "recorded": True}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+async def _ollama_ok() -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get("http://localhost:11434/api/tags")
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+@app.get("/health/ready")
+async def health_ready():
+    ollama_ok = await _ollama_ok()
+    return {
+        "status": "ready" if ollama_ok else "degraded",
+        "ollama": ollama_ok,
+    }
+
+
+@app.get("/status", dependencies=[Depends(require_api_key)])
+async def status():
+    import sqlite3 as _sqlite3
+
+    ollama_ok = await _ollama_ok()
+
+    db_ok = False
+    try:
+        conn = _sqlite3.connect(RUN_DB_PATH, timeout=1)
+        conn.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:
+        pass
+
+    keys = {
+        "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
+        "gemini": bool(os.getenv("GEMINI_API_KEY")),
+        "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
+        "groq": bool(os.getenv("GROQ_API_KEY")),
+    }
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "ollama": ollama_ok,
+        "db": db_ok,
+        "keys_configured": keys,
+        "features": _feature_flags(),
+    }
+
+
+@app.get("/metrics/runs")
+async def get_runs(limit: int = 20):
+    return {"runs": metrics_store.list_runs(limit=max(1, min(limit, 100)))}
+
+
+@app.get("/metrics/summary")
+async def get_metrics_summary():
+    return metrics_store.get_summary()
+
+
+@app.get("/metrics/quality")
+async def get_metrics_quality(limit: int = 100):
+    return await asyncio.to_thread(run_store.list_quality_metrics, max(1, min(limit, 500)))
+
+
+def start():
+    import uvicorn
+
+    host = os.getenv("COUNCIL_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = int(os.getenv("COUNCIL_PORT", "8765"))
+    api_key = os.getenv("COUNCIL_API_KEY", "").strip()
+
+    if not _is_localhost(host) and not api_key:
+        raise SystemExit(
+            "ERROR: COUNCIL_API_KEY must be set when binding to non-localhost. "
+            "Set COUNCIL_API_KEY or use COUNCIL_HOST=127.0.0.1"
+        )
+
+    # Auto-reload watches the filesystem and drops active SSE streams on any
+    # file change (e.g. the sandbox temp file) — off by default, opt-in for dev.
+    reload = os.getenv("COUNCIL_RELOAD", "false").strip().lower() == "true"
+    uvicorn.run("council.main:app", host=host, port=port, reload=reload)
+
+
+if __name__ == "__main__":
+    start()

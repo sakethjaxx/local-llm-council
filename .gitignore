@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 venv/
+data/*
+!data/.gitkeep
 council_metrics.jsonl
 council_memory.json
 council_runs.db

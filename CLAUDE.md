@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Local-first multi-model AI council. User submits a topic + optional file attachments. A roster of LLM personas (via Ollama or cloud providers) runs a 3-phase pipeline: independent analysis → peer cross-review → chairman synthesis. Output streams live to a web UI. Zero recurring cost in the default path.
+Local-first multi-model AI council. User submits a topic + optional file attachments. A roster of LLM personas (via Ollama or cloud providers) runs independent analysis → chairman synthesis by default; optional Deep Debate adds peer cross-review. Output streams live to a web UI. Zero recurring cost in the default path.
 
 ## Stack
 
@@ -12,20 +12,20 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | LLM calls | LiteLLM (Ollama-first, cloud opt-in) |
 | Local models | Ollama |
 | Embeddings | `sentence-transformers` `all-MiniLM-L6-v2` |
-| Persistence | SQLite (`council_runs.db`) |
+| Persistence | SQLite (`data/council_runs.db`) |
 | Streaming | Server-Sent Events (SSE) |
-| Frontend | Single `static/index.html` (vanilla JS, cyberpunk UI) |
+| Frontend | `static/index.html` + `static/app.js` + `static/style.css` (vanilla JS) |
 | Python | 3.13 tested, 3.12+ intended |
 
 ## Key Files
 
 | File | Role |
 |---|---|
-| `orchestrator.py` | 3-phase pipeline, streaming, retry logic |
+| `orchestrator.py` | Council pipeline, streaming, retry logic |
 | `main.py` | FastAPI app, all HTTP endpoints |
 | `router_agent.py` | Dynamic Swarm — LLM generates roster personas |
-| `smart_phase.py` | MiniLM cosine similarity → skip Phase 2 if unanimous |
-| `memory_graph.py` | NetworkX triple store, keyword retrieval (upgrading to SQLite+vectors) |
+| `smart_phase.py` | MiniLM cosine similarity → skip Phase 2 if unanimous (Deep Debate only) |
+| `memory_store.py` | SQLite-backed triple store with vector retrieval |
 | `provider_caps.py` | Model capability registry — vision, context window, cost, response_format |
 | `run_store.py` | SQLite persistence for runs, phase outputs, feedback |
 | `metrics_store.py` | JSONL metrics (latency, status) — thin wrapper over run_store eventually |
@@ -37,9 +37,9 @@ Local-first multi-model AI council. User submits a topic + optional file attachm
 | `project_graph.py` | AST-based project dependency graph |
 | `demo_catalog.py` | Preset council configurations for demos |
 | `demo_samples/` | Sample input files for demo presets |
-| `static/index.html` | Full frontend (~1300 lines, HTML/CSS/JS co-located) |
+| `static/index.html` / `static/app.js` / `static/style.css` | Frontend markup, behaviour, and styles |
 
-## Architecture: 3-Phase Pipeline
+## Architecture: Default Two-Phase Pipeline
 
 ```
 User Input (topic + attachments)
@@ -53,23 +53,20 @@ User Input (topic + attachments)
   Seat B ──┼──► asyncio.gather() → N independent analyses
   Seat C ──┘
         │
-        ▼ smart_phase: cosine sim > 0.88? skip Phase 2
-        │
-[Phase 2] Cross-Review (each seat critiques others)
-  Seat A reviews B, C
-  Seat B reviews A, C     ◄── parallel
-  Seat C reviews A, B
-        │
         ▼
 [Phase 3] Chairman Synthesis
-  All analyses + reviews → single chairman model → ChairmanDecision JSON
+  All analyses → single chairman model → ChairmanDecision JSON
   (verdict, risk_score, action_items, consensus, disputes)
         │
         ▼
 SSE stream to UI + RunStore write + Memory extract (async)
 ```
 
-## Database Schema (council_runs.db)
+Deep Debate is off by default. When enabled, the optional Phase 2 cross-review runs between
+analysis and chairman synthesis; `smart_phase.py` can then skip it for sufficiently unanimous
+analyses. It does not execute in a default run.
+
+## Database Schema (data/council_runs.db)
 
 ```sql
 runs(run_id PK, started_at, finished_at, status, topic, roster_json, fingerprint_hash, deep_debate, error)
@@ -99,16 +96,33 @@ Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-ph
 
 | Var | Default | Purpose |
 |---|---|---|
-| `COUNCIL_CORS_ORIGINS` | `*` | Allowed CORS origins |
-| `COUNCIL_ENABLE_PYTHON_TOOL` | `true` | Enable Python REPL tool for cloud models |
-| `COUNCIL_METRICS_FILE` | `council_metrics.jsonl` | JSONL metrics output path |
-| `COUNCIL_MAX_RECENT_RUNS` | `20` | Max runs returned by metrics endpoint |
+| `COUNCIL_DB_PATH` | `data/council_runs.db` | SQLite run, skill, and memory database path |
+| `COUNCIL_HOST` | `127.0.0.1` | Server bind host |
+| `COUNCIL_PORT` | `8765` | Server port |
+| `COUNCIL_API_KEY` | empty | Required on non-localhost binds; protects endpoints when set |
+| `COUNCIL_CORS_ORIGINS` | localhost allowlist | Comma-separated allowed origins; `*` is opt-in |
+| `COUNCIL_PROJECT_ROOT` | unset | Confines local project paths to this directory tree |
+| `COUNCIL_ALLOW_URL_FETCH` | `false` | Permit remote URL extraction from submitted text |
+| `COUNCIL_ENABLE_WEB_SEARCH` | `false` | Permit DuckDuckGo dispute-resolution search |
+| `COUNCIL_MAX_UPLOAD_MB` | `20` | Maximum uploaded-file size in MiB |
+| `COUNCIL_MAX_FILES` | `10` | Maximum uploaded attachments |
+| `COUNCIL_ENABLE_PYTHON_TOOL` | `false` | Enable Python REPL tool for cloud models |
+| `COUNCIL_LLM_TIMEOUT` | `180` | Per-call LLM timeout in seconds |
+| `COUNCIL_MAX_PARALLEL_MEMBERS` | `4` | Maximum concurrent member LLM calls |
+| `COUNCIL_SMART_PHASE_THRESHOLD` | `0.88` | Similarity threshold used to skip Deep Debate Phase 2 |
+| `COUNCIL_MEMORY_MODEL` | chairman extraction model | Override the model used for memory extraction |
+| `COUNCIL_MEMORY_RELEVANCE_FLOOR` | `0.25` | Minimum score required to inject a memory triple |
+| `COUNCIL_METRICS_FILE` | `data/council_metrics.jsonl` | JSONL metrics output path |
+| `COUNCIL_MAX_RECENT_RUNS` | `200` | Max runs returned by metrics endpoint |
 | `COUNCIL_BOOTSTRAP_LOCAL_MODELS` | `false` | Auto-pull Ollama models on startup |
+| `COUNCIL_RELOAD` | `false` | Enable Uvicorn development reload |
+| `COUNCIL_LOG_LEVEL` | `INFO` | Application log level |
+| `COUNCIL_LOG_FORMAT` | `json` | Log format (`json` or plain text) |
 
 ## Test Suite
 
 Run: `./venv/bin/pytest tests/ -q` (or `python3 -m pytest tests/ -q`)
-Current: 102 tests passing. Tests use unittest stubs for litellm and httpx.
+Current: run `./venv/bin/pytest tests/ -q` for the authoritative count. Tests use unittest stubs for litellm and httpx.
 
 ## What NOT To Do
 
@@ -117,5 +131,4 @@ Current: 102 tests passing. Tests use unittest stubs for litellm and httpx.
 - Do not write keys or tokens to disk or logs — `redact_config()` must cover all serialization boundaries
 - Do not use `os.walk` + AST parsing in `blast_radius.py` — import from `project_graph.py`
 - Do not add new columns to SQLite tables without a migration path
-- Do not grow `index.html` further before extracting config to `presets.json`
-- Do not modify `memory_graph.py` during Phase 1 or Phase 1.5 — Phase 2 intentionally replaces it with `memory_store.py`
+- Do not add new frontend dependencies without a build/load-order plan

@@ -510,9 +510,9 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         self.assertEqual(events[-1]["type"], "done")
-        self.assertEqual(max_tokens_by_phase[1], {500})
-        self.assertEqual(max_tokens_by_phase[2], {400})
-        self.assertEqual(max_tokens_by_phase[3], {800})
+        self.assertEqual(max_tokens_by_phase[1], {700})
+        self.assertEqual(max_tokens_by_phase[2], {500})
+        self.assertEqual(max_tokens_by_phase[3], {1000})
 
     async def test_run_records_all_fast_mode_phases(self):
         class FakeDelta:

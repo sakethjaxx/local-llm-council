@@ -63,6 +63,38 @@ class SmartPhaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(skip)
 
+    async def test_conflicting_positions_force_debate_even_when_prose_is_similar(self):
+        analyses = {
+            "a": "alpha one\n## POSITION\n- SHIP because evidence is sufficient",
+            "b": "alpha two\n## POSITION\n- BLOCK because evidence is insufficient",
+            "c": "alpha three\n## POSITION\n- SHIP with safeguards",
+        }
+        with patch.object(smart_phase, "get_embedder", return_value=KeywordEmbedder()):
+            skip, score = await smart_phase.should_skip(analyses)
+
+        self.assertGreater(score, smart_phase.SKIP_THRESHOLD)
+        self.assertFalse(skip)
+
+    async def test_extended_disagreement_phrases_force_debate(self):
+        phrases = ["cannot ship", "unacceptable risk", "not ready for production", "flawed assumption"]
+        for phrase in phrases:
+            analyses = {
+                "a": "alpha one",
+                "b": f"alpha two with {phrase} noted",
+                "c": "alpha three",
+            }
+            with patch.object(smart_phase, "get_embedder", return_value=KeywordEmbedder()):
+                skip, _ = await smart_phase.should_skip(analyses)
+            self.assertFalse(skip, f"Phrase '{phrase}' should have forced debate")
+
+    def test_strip_template_headers(self):
+        text = "## STRENGTHS\nGood points\n## RISKS\nSome risk\n## RECOMMENDATIONS\nFix it\n## POSITION\n- SHIP"
+        stripped = smart_phase._strip_template_headers(text)
+        self.assertNotIn("## STRENGTHS", stripped)
+        self.assertNotIn("## RISKS", stripped)
+        self.assertIn("Good points", stripped)
+        self.assertIn("Some risk", stripped)
+
 
 if __name__ == "__main__":
     unittest.main()

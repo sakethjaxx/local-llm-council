@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -81,6 +82,47 @@ class RunStoreTests(unittest.TestCase):
             [row["version"] for row in rows],
             ["001_smart_phase_score", "002_phase_output_observability", "003_quality_metrics"],
         )
+
+    def test_migrations_upgrade_a_legacy_database_idempotently(self):
+        legacy_path = os.path.join(self.temp_dir.name, "legacy.db")
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE runs (
+                    run_id TEXT PRIMARY KEY,
+                    started_at REAL NOT NULL,
+                    finished_at REAL,
+                    status TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    roster_json TEXT NOT NULL,
+                    fingerprint_hash TEXT,
+                    deep_debate INTEGER NOT NULL,
+                    error TEXT
+                );
+                CREATE TABLE phase_outputs (
+                    run_id TEXT NOT NULL,
+                    phase INTEGER NOT NULL,
+                    member_id TEXT NOT NULL,
+                    output TEXT NOT NULL,
+                    tokens_in INTEGER,
+                    tokens_out INTEGER,
+                    latency_ms INTEGER,
+                    PRIMARY KEY (run_id, phase, member_id)
+                );
+                """
+            )
+
+        RunStore(legacy_path)
+        RunStore(legacy_path)  # A second boot must not reapply migrations.
+
+        with sqlite3.connect(legacy_path) as conn:
+            run_columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+            phase_columns = {row[1] for row in conn.execute("PRAGMA table_info(phase_outputs)")}
+            versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
+
+        self.assertTrue({"smart_phase_score", "parse_tier", "phase1_divergence", "specificity_score"} <= run_columns)
+        self.assertTrue({"finish_reason", "attempt_number"} <= phase_columns)
+        self.assertEqual(versions, ["001_smart_phase_score", "002_phase_output_observability", "003_quality_metrics"])
 
     def test_quality_metrics_lifecycle(self):
         self.store.begin_run("quality-run", "topic", {}, deep_debate=True)

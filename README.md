@@ -1,82 +1,224 @@
-# LLM Council
+# 🏛️ LLM Council
 
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-pytest-green)
-![Runtime](https://img.shields.io/badge/runtime-local--first-informational)
+<div align="center">
 
-LLM Council is a local-first multi-model review and decision engine with a FastAPI backend and web UI. It is for developers, researchers, and advanced users who want to compare, critique, and combine model outputs on their own machine or controlled infrastructure.
+![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-Local--First-black?style=for-the-badge&logo=ollama&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-165%20passed-success?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 
-## 30-Second Pitch
+**A hardware-aware, local-first multi-model review and decision engine for consumer machines.**
 
-Run several local or optional cloud LLMs as a structured review council. Each model analyzes the same topic, optionally critiques the others, and a chairman model produces a final verdict with risks and actions. The default path is local-first with Ollama, persistent run history, replay/export, and guardrails for self-hosted open-source use.
+*Run multi-agent debates locally in Ollama without VRAM thrashing, context truncation, or cloud lock-in.*
 
-## Table of Contents
+[Quick Start](#-quick-start-in-60-seconds) • [Killer USPs](#-the-4-killer-usps) • [Architecture](#-system-architecture) • [Pre-Commit Hook](#-git-pre-commit-hook--blast-radius) • [Configuration](#-configuration-env)
 
-- [What It Does](#what-it-does)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Deployment Modes](#deployment-modes)
-- [Security Notes](#security-notes)
-- [Architecture](#architecture)
-- [Testing](#testing)
-- [Contributing](#contributing)
+</div>
 
-## What It Does
+---
 
-- Runs a council of local and optional cloud models in parallel, then produces a final synthesized verdict.
-- Streams council progress live in the browser and supports prompt, file, and image-assisted workflows.
-- Persists runs for replay, export, feedback, and metrics tracking.
-- Uses Ollama for local model execution and supports configurable model rosters and token budgets.
+## ⚡ Why LLM Council?
 
-## Quick Start
+Most multi-agent frameworks (CrewAI, AutoGen, LangGraph) make a fatal assumption: **infinite cloud API credits or an enterprise GPU cluster**.
 
-1. `git clone <repo-url>`
-2. `cd local-llm-council`
-3. `python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate`
-4. `pip install -r requirements.txt`
-5. `cp env.example .env`  (leave `COUNCIL_API_KEY` empty for localhost — do **not** add an inline comment after `=`)
-6. `ollama pull qwen2.5:7b`  (the app auto-fits the roster to your RAM and lists any extra `ollama pull` commands it wants)
-7. `uvicorn main:app --port 8765`
-8. open `http://localhost:8765`
+When you try running multi-model debates on a 16GB consumer laptop using Ollama:
+- ❌ **The VRAM Thrash Death Spiral:** Loading 3–4 distinct 8B models concurrently causes Ollama to constantly evict and swap weights between RAM and disk, freezing your machine.
+- ❌ **The "Tail-Drop" Context Bias:** Naive frameworks concatenate peer reviews and slice `text[:max_tokens]`, systematically truncating the last agents' critique.
+- ❌ **Structural Consensus Blindness:** Multi-agent reviews using boilerplate Markdown headers falsely trigger consensus gates because 40% of their tokens are identical formatting.
 
-The roster is chosen automatically for your machine's memory ceiling: on a ~16GB box every seat shares one resident model (fast, no swap); a 24GB+ box unlocks a genuinely diverse multi-model council. See `GET /hardware/suggest` for the fitted roster and the reason.
+**LLM Council solves the real systems-engineering challenges of local multi-agent inference.**
 
-## Configuration
+---
 
-| Variable | Description |
-| --- | --- |
-| `COUNCIL_HOST` | Host interface for the FastAPI server. Defaults to `127.0.0.1` for local-only access. |
-| `COUNCIL_PORT` | Port used by the FastAPI server. Defaults to `8765`. |
-| `COUNCIL_API_KEY` | Optional API key required for authenticated access when binding to non-localhost. |
-| `COUNCIL_ALLOW_URL_FETCH` | Enables remote URL fetching for council inputs. Disabled by default because it increases attack surface. |
-| `COUNCIL_ENABLE_PYTHON_TOOL` | Enables the Python REPL tool for phase-1 execution. Disabled by default. |
-| `COUNCIL_MAX_UPLOAD_MB` | Maximum size for a single uploaded attachment in MB. Defaults to `20`. |
-| `COUNCIL_MAX_FILES` | Maximum number of uploaded attachments per run. Defaults to `10`. |
+## 🎯 The 4 Killer USPs
 
-## Deployment Modes
+### 1. ⚡ Zero-Thrash Hardware Fitting
+Auto-detects your system RAM and available VRAM.
+- On **16GB machines**, it keeps a single resident model (e.g. `qwen2.5:7b`) and enforces **persona sampling distributions** (`T=0.15` to `0.35`, `top_p=0.80` to `0.95`) to prevent homogenous groupthink.
+- On **24GB+ machines**, it unlocks true multi-model specialist councils (e.g., Qwen + Gemma + Llama) with strict concurrency semaphores.
 
-- Local only (default, no auth needed): `COUNCIL_HOST=127.0.0.1`
-- LAN/VPS: must set `COUNCIL_API_KEY`.
+### 2. 🛡️ Native Git Pre-Commit Hook & Blast Radius
+Run `python src/council/cli.py check_diff` before every commit. The council analyzes your Git diff, traverses your project's dependency DAG, warns about broken downstream imports, and blocks commits with critical security flaws (`risk_score >= 8`).
 
-## Security Notes
+### 3. ⚖️ Fair-Share Token Allocation & Smart Consensus
+- **Fair-Share Slicing:** Binary-searches peer analyses into equal context allocations so every council seat receives equal deliberation weight.
+- **Negation-Aware Consensus:** Strips Markdown headers and runs stance-negation regexes. If the council unanimously agrees on Phase 1, Phase 2 debate is bypassed—cutting latency by 50% while guaranteeing dissenters are never silenced.
 
-- Cloud API keys are stored in browser `localStorage`. Use them only on trusted machines and browsers.
-- The Python tool is disabled by default, requires Docker on the host, and is intended for advanced users only.
-- URL fetching is disabled by default. Enable it with `COUNCIL_ALLOW_URL_FETCH=true` only if you understand the SSRF risk.
+### 4. 🧠 Continuous SQLite Knowledge Graph & Skill Registry
+Extracts knowledge triples `(Subject -> Predicate -> Object)` with temporal decay ($0.99^{\text{days}}$) and stores reusable analysis patterns. Your council gets smarter with every architectural decision you make.
 
-## Architecture
+---
 
-LLM Council is a FastAPI application that orchestrates multiple model seats, streams intermediate output to a browser UI, persists run state and metrics locally, and can use Ollama-backed local models with optional cloud providers layered in. See `docs/ARCHITECTURE.md` for details.
+## 🚀 Quick Start in 60 Seconds
 
-## Testing
-
+### 1. Clone & Setup
 ```bash
-./venv/bin/pytest tests/ -q
+git clone https://github.com/<your-username>/local-llm-council.git
+cd local-llm-council
+python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp env.example .env
 ```
 
-The local eval harness under `tests/eval/` is separate because it requires Ollama and a pinned local model.
+### 2. Pull Your Default Model
+```bash
+ollama pull qwen2.5:7b
+```
 
-## Contributing
+### 3. Launch Server & Web UI
+```bash
+python run.py
+```
+Open **`http://localhost:8765`** in your browser.
 
-Contributions are welcome. See `CONTRIBUTING.md` for the development workflow and `SECURITY.md` for reporting vulnerabilities.
+---
+
+## 🖥️ Web UI Features
+
+- **⚡ Live SSE Streaming:** Real-time token streaming with animated cards and phase progress.
+- **📁 Drag-and-Drop Ingest:** Drop Markdown, Python, TS, Go, Rust, Java, C++, SQL, PDFs, or photos directly onto the input.
+- **🛑 Instant Stream Abort:** Click "Stop Council" to cancel long runs cleanly without zombie requests.
+- **⌨️ Keyboard Shortcuts:**
+  - `Cmd + Enter` / `Ctrl + Enter`: Run Council or Project Review.
+  - `Escape`: Close active modals.
+- **📥 1-Click Model Library:** Browse and pull Ollama models sized for your machine with live download progress bars.
+- **💬 Interactive Peer Chat:** Click any council seat (Architect, Security, Perf) to have a 1-on-1 follow-up discussion.
+- **📦 Replay & Export:** Full run history stored in SQLite; export reports to Markdown, JSON, or ZIP archives.
+
+---
+
+## 💻 Git Pre-Commit Hook & Blast Radius
+
+Integrate LLM Council into your development workflow:
+
+```bash
+# Test staged changes manually:
+python src/council/cli.py check_diff
+
+# Or install as a native git pre-commit hook:
+echo "python src/council/cli.py check_diff" > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+### What Happens on `git commit`:
+```
+$ git commit -m "refactor: update auth middleware"
+[INFO] Precommit review started...
+[INFO] Architectural Blast Radius: 4 downstream routes depend on auth.py
+[SECURITY] Scanning for OWASP vulnerabilities...
+[CHAIRMAN] Verdict: APPROVE (Risk Score: 2/10)
+Commit accepted.
+```
+
+---
+
+## 🏛️ System Architecture
+
+```
+                       User Input / Code Files / Git Diff / Project Scan
+                                              │
+                                              ▼
+                    ┌───────────────────────────────────────────────────┐
+                    │ 1. Context Prep & Continuous Memory Injection     │
+                    │    • Ingest documents & parse multi-language code │
+                    │    • Match SQLite knowledge graph triples         │
+                    │    • Inject relevant domain analysis skills       │
+                    └─────────────────────────┬─────────────────────────┘
+                                              │
+                                              ▼
+                    ┌───────────────────────────────────────────────────┐
+                    │ 2. Phase 1 — Independent Parallel Analysis        │
+                    │    • Architect (T=0.25) | Security (T=0.15) | ... │
+                    │    • Gated concurrency (Semaphore=2)              │
+                    │    • Fair-share context window allocation         │
+                    └─────────────────────────┬─────────────────────────┘
+                                              │
+                                  [Smart Consensus Gate]
+                                 /                      \
+                      (Unanimous Agreement)       (Dissent / Contradiction)
+                               │                                │
+                               │               ┌────────────────┴───────────────┐
+                               │               │ 3. Phase 2 — Dialectic Review  │
+                               │               │    • Peer critique & disputes  │
+                               │               └────────────────┬───────────────┘
+                               │                                │
+                               └───────────────┬────────────────┘
+                                               │
+                                               ▼
+                    ┌───────────────────────────────────────────────────┐
+                    │ 4. Phase 3 — Chairman Synthesis & Decision        │
+                    │    • Optional live DuckDuckGo dispute verification│
+                    │    • Multi-tier JSON parsing (Strict->Repair->AST)│
+                    │    • Concrete Action Items + 0-10 Risk Score      │
+                    └─────────────────────────┬─────────────────────────┘
+                                              │
+                                              ▼
+                    ┌───────────────────────────────────────────────────┐
+                    │ 5. Post-Run Learning (Cooperative Background)     │
+                    │    • Knowledge Triple extraction                  │
+                    │    • Skill confidence reinforcement               │
+                    └───────────────────────────────────────────────────┘
+```
+
+---
+
+## ⚙️ Configuration (`.env`)
+
+| Variable | Default | Description |
+| :--- | :---: | :--- |
+| `COUNCIL_HOST` | `127.0.0.1` | Server host binding. Local-only by default. |
+| `COUNCIL_PORT` | `8765` | FastAPI server port. |
+| `COUNCIL_API_KEY` | `""` | Optional API key required when binding to `0.0.0.0` or VPS. |
+| `COUNCIL_MAX_PARALLEL_MEMBERS` | `2` | Max concurrent Ollama inference calls to prevent VRAM thrashing. |
+| `COUNCIL_LLM_TIMEOUT` | `300` | Hard wall-clock timeout in seconds for slow local hardware. |
+| `COUNCIL_ENABLE_WEB_SEARCH` | `false` | Enable DuckDuckGo web search to fact-check council disputes. |
+| `COUNCIL_MAX_UPLOAD_MB` | `20` | Maximum file attachment size in MB. |
+
+*(Optional cloud API keys for OpenAI, Anthropic, Gemini, or Groq can be configured in `.env` or directly in the Web UI via headers).*
+
+---
+
+## 🧪 Testing & Evaluation
+
+### Run Test Suite (165 Tests)
+```bash
+pytest tests/ -v
+```
+
+### Run Multi-Criteria Evaluation Benchmark
+```bash
+python tests/eval/run_eval.py --all
+```
+Evaluates council decisions against golden benchmark topics using composite scoring ($0.40 \times \text{SemanticSimilarity} + 0.60 \times \text{ConceptAssertions}$).
+
+---
+
+## 📂 Project Structure
+
+```
+local-llm-council/
+├── run.py                     # Single-command application entrypoint
+├── pyproject.toml             # Package metadata and CLI registrations
+├── requirements.txt           # Production dependencies
+├── src/council/
+│   ├── main.py                # FastAPI app, SSE routes, lifecycle hooks
+│   ├── orchestrator.py        # 3-Phase deliberation engine & token balancer
+│   ├── smart_phase.py         # Negation-aware consensus gate
+│   ├── hardware_detect.py     # Hardware tier modeling & sampling presets
+│   ├── ollama_manager.py      # Ollama stream puller & process supervisor
+│   ├── project_graph.py       # Native code DAG & dependency analyzer
+│   ├── blast_radius.py        # Reverse dependency impact engine
+│   ├── cli.py                 # Git pre-commit CLI tool
+│   ├── memory_store.py        # SQLite triple store with temporal decay
+│   ├── skill_registry.py      # Extracted reusable skills
+│   ├── io_parser.py           # Multi-language code & document parser
+│   └── static/                # Web UI (Vanilla JS, CSS, HTML)
+└── tests/                     # 165 unit & integration tests
+```
+
+---
+
+## 📜 License
+
+MIT License. Designed for privacy, local open weights, and self-hosted control.

@@ -39,8 +39,8 @@
 │                                                                 │
 │  3. Phase execution                                             │
 │     Phase 1: asyncio.gather(seat_A, seat_B, seat_C)             │
-│     smart_phase: cosine_sim > 0.88 → skip Phase 2              │
-│     Phase 2: asyncio.gather(review_A, review_B, review_C)       │
+│     Phase 2: optional Deep Debate cross-review                  │
+│              (smart_phase may skip when unanimous)              │
 │     Phase 3: chairman_model → ChairmanDecision JSON             │
 │                                                                 │
 │  4. Post-run                                                    │
@@ -81,11 +81,8 @@ User submits topic + files
         │     each seat: system_prompt(persona) + context + topic + attachments
         │     streams chunks → SSE queue
         │
-        ├─► smart_phase.check_unanimous_consensus()
-        │     cosine pairwise similarity of Phase 1 outputs
-        │     if avg > 0.88: skip Phase 2
-        │
-        ├─► [Phase 2] N parallel cross-reviews (if not skipped)
+        ├─► [Phase 2] N parallel cross-reviews (Deep Debate only;
+        │    smart_phase may skip it when analyses are unanimous)
         │     each seat reads all OTHER Phase 1 analyses
         │     streams chunks → SSE queue
         │
@@ -118,22 +115,16 @@ Single source of truth for model capabilities. Before any LLM call: check `caps_
 ### `run_store.py` — Current
 All durable state about runs. SQLite with WAL mode. Owns the schema. No business logic.
 
-### `memory_graph.py` — Current (being replaced in Phase 2)
-NetworkX triple store, JSON-backed, keyword retrieval. Works but retrieval is lexical only.
+### `smart_phase.py` and `embeddings.py` — Current
+The consensus check uses the process-wide `embeddings.get_embedder()` singleton. Do not instantiate SentenceTransformer elsewhere.
 
-### `smart_phase.py` — Current
-MiniLM consensus check. Loads SentenceTransformer inline — will be refactored to use `embeddings.py` singleton in Phase 1.5.
+### `memory_store.py` — Current
+SQLite-backed triple store with vector retrieval and a relevance floor. Memory extraction runs asynchronously after a run.
 
-### `embeddings.py` — Planned (Phase 1.5)
-Singleton SentenceTransformer. Loaded once per process. Used by smart_phase, memory_store, skill_registry. Never instantiated inline in any other module.
-
-### `memory_store.py` — Planned (Phase 2, replaces memory_graph.py)
-SQLite-backed triple store with vector retrieval. Async-safe. Non-blocking writes (background task after run).
-
-### `skill_registry.py` — Planned (Phase 2)
+### `skill_registry.py` — Current
 Extract → sanity-check → store → inject flow for analysis skills. Quality-gated. Confidence-scored.
 
-### `project_fingerprint.py` — Planned (Phase 2)
+### `project_fingerprint.py` — Current
 Pure heuristic. No LLM. Detects tech stack + domain. Returns dict + stable SHA-256 hash. Used as `fingerprint_hash` on runs to group related sessions.
 
 ## SQLite Schema (Full, Post-Phase-2)
@@ -195,10 +186,10 @@ data: {"type": "done"}
 ```
 main.py
   └── orchestrator.py
-        ├── embeddings.py          ← singleton (Phase 1.5)
+        ├── embeddings.py          ← singleton
         ├── smart_phase.py         ← uses embeddings.get_embedder()
-        ├── memory_store.py        ← uses embeddings.get_embedder() (Phase 2)
-        ├── skill_registry.py      ← uses embeddings.get_embedder() (Phase 2)
+        ├── memory_store.py        ← uses embeddings.get_embedder()
+        ├── skill_registry.py      ← uses embeddings.get_embedder()
         ├── provider_caps.py
         ├── run_store.py
         ├── io_parser.py

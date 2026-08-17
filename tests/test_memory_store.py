@@ -1,3 +1,4 @@
+import os
 import time
 import types
 import unittest
@@ -6,6 +7,7 @@ from unittest.mock import patch
 import numpy as np
 
 from memory_store import SQLiteMemory
+from cloud_keys import scoped_cloud_keys
 
 
 class _FakeEmbedder:
@@ -20,6 +22,8 @@ class _FakeEmbedder:
             vector[2] = 1.0
         if "stale" in text:
             vector[3] = 1.0
+        if "quantum" in text:
+            vector[2] = 1.0
         if not vector.any():
             vector[0] = 0.1
         return vector
@@ -54,6 +58,58 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("microservices -> decided_to_use -> service mesh", context)
 
+    async def test_extract_memory_forwards_scoped_key_and_timeout(self):
+        async def fake_acompletion(*args, **kwargs):
+            return _fake_completion_with_triples([])
+
+        with patch("memory_store.litellm.acompletion", side_effect=fake_acompletion) as completion:
+            with scoped_cloud_keys({"openai": "sk-test"}):
+                await self.store.extract_memory("topic", "verdict", "openai/gpt-4o")
+
+        self.assertEqual(completion.call_args.kwargs["api_key"], "sk-test")
+        self.assertEqual(
+            completion.call_args.kwargs["timeout"],
+            float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
+        )
+
+    async def test_get_context_returns_empty_when_nothing_is_relevant(self):
+        now = time.time()
+        with self.store._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_triples (
+                    subject, predicate, object, confidence, reinforced,
+                    contradicted, last_seen, created_at, embedding
+                ) VALUES (?, ?, ?, 1.0, 1, 0, ?, ?, ?)
+                """,
+                ("microservices", "uses", "service mesh", now, now,
+                 np.array([1, 0, 0, 0], dtype=np.float32).tobytes()),
+            )
+
+        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()):
+            context = await self.store.get_context("quantum chromodynamics lattice gauge theory", "test-model")
+
+        self.assertEqual(context, "")
+
+    async def test_get_context_returns_relevant_triples(self):
+        now = time.time()
+        with self.store._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_triples (
+                    subject, predicate, object, confidence, reinforced,
+                    contradicted, last_seen, created_at, embedding
+                ) VALUES (?, ?, ?, 1.0, 1, 0, ?, ?, ?)
+                """,
+                ("microservices", "uses", "service mesh", now, now,
+                 np.array([1, 0, 0, 0], dtype=np.float32).tobytes()),
+            )
+
+        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()):
+            context = await self.store.get_context("microservices architecture", "test-model")
+
+        self.assertIn("microservices -> uses -> service mesh", context)
+
     async def test_confidence_decay(self):
         now = time.time()
         vector = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -80,7 +136,10 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
                 ("fresh-system", "recommended", "service mesh", 1.0, now, now, blob),
             )
 
-        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()):
+        # This test exercises ordering by time-decayed confidence; lower the
+        # relevance floor so the deliberately year-old triple remains visible.
+        with patch("memory_store.get_embedder", return_value=_FakeEmbedder()), \
+             patch("memory_store.MEMORY_RELEVANCE_FLOOR", 0.0):
             context = await self.store.get_context("service mesh architecture", "test-model")
 
         lines = [line for line in context.splitlines() if "->" in line]

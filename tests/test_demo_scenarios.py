@@ -22,7 +22,7 @@ class DemoScenariosTests(unittest.TestCase):
         self.assertIn("image", preset_ids)
 
     def test_demo_sample_files_exist_and_parse(self):
-        sample_dir = Path(__file__).parent.parent / "demo_samples"
+        sample_dir = Path(__file__).parent.parent / "src" / "council" / "demo_samples"
         self.assertTrue(sample_dir.exists())
 
         arch_brief = sample_dir / "architecture_brief.md"
@@ -92,6 +92,29 @@ class DemoScenariosTests(unittest.TestCase):
         self.assertIn("phase_start", types)
         self.assertIn("member_done", types)
         self.assertIn("done", types)
+
+    def test_eval_assertion_evaluator(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent / "eval"))
+        from run_eval import evaluate_assertions
+
+        topic = {
+            "required_concepts": ["sql injection", "parameterized"],
+            "forbidden_concepts": ["safe to ship"],
+            "expected_risk_range": [7, 10],
+        }
+
+        # Perfect match
+        res = {"verdict": "Critical SQL injection detected. Use parameterized queries.", "risk_score": 9}
+        score, flaws = evaluate_assertions(topic, res, res["verdict"])
+        self.assertEqual(score, 1.0)
+        self.assertEqual(len(flaws), 0)
+
+        # Flawed match (contains forbidden concept and missing concept)
+        bad_res = {"verdict": "This is safe to ship without change.", "risk_score": 2}
+        bad_score, bad_flaws = evaluate_assertions(topic, bad_res, bad_res["verdict"])
+        self.assertLess(bad_score, 0.5)
+        self.assertGreaterEqual(len(bad_flaws), 2)
 
 
 if __name__ == "__main__":

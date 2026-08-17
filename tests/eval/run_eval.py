@@ -14,10 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add the application package source directory to path.
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from embeddings import get_embedder
+from council.embeddings import get_embedder
 
 
 GOLDEN_PATH = Path(__file__).parent / "golden_topics.json"
@@ -63,8 +63,51 @@ def _build_eval_config(model: str) -> dict:
     }
 
 
+def evaluate_assertions(topic_entry: dict, chairman_result: dict, raw_verdict: str) -> tuple[float, list[str]]:
+    details = []
+    checks_total = 0
+    checks_passed = 0
+
+    verdict_text = (chairman_result.get("verdict", "") + " " + raw_verdict).lower()
+
+    # 1. Required concepts
+    required = topic_entry.get("required_concepts", [])
+    if required:
+        for concept in required:
+            checks_total += 1
+            if concept.lower() in verdict_text:
+                checks_passed += 1
+            else:
+                details.append(f"missing concept: '{concept}'")
+
+    # 2. Forbidden concepts
+    forbidden = topic_entry.get("forbidden_concepts", [])
+    if forbidden:
+        for concept in forbidden:
+            checks_total += 1
+            if concept.lower() not in verdict_text:
+                checks_passed += 1
+            else:
+                details.append(f"forbidden concept present: '{concept}'")
+
+    # 3. Expected risk range
+    risk_range = topic_entry.get("expected_risk_range")
+    if risk_range and len(risk_range) == 2:
+        checks_total += 1
+        risk = chairman_result.get("risk_score", -1)
+        if risk_range[0] <= risk <= risk_range[1]:
+            checks_passed += 1
+        else:
+            details.append(f"risk {risk} outside [{risk_range[0]}, {risk_range[1]}]")
+
+    if checks_total == 0:
+        return 1.0, []
+
+    return checks_passed / checks_total, details
+
+
 async def eval_topic(topic_entry: dict, model: str) -> dict:
-    from orchestrator import CouncilOrchestrator, parse_chairman_response
+    from council.orchestrator import CouncilOrchestrator, parse_chairman_response
 
     orch = CouncilOrchestrator()
     config = _build_eval_config(model)
@@ -94,12 +137,17 @@ async def eval_topic(topic_entry: dict, model: str) -> dict:
     embedder = get_embedder()
     ref_emb = embedder.encode(topic_entry["reference_verdict"])
     got_emb = embedder.encode(chairman_verdict) if chairman_verdict else embedder.encode("")
-    score = cosine_sim(ref_emb, got_emb)
+    semantic_score = cosine_sim(ref_emb, got_emb)
+    assertion_score, assertion_flaws = evaluate_assertions(topic_entry, chairman_result, chairman_verdict)
+    composite_score = round(0.4 * semantic_score + 0.6 * assertion_score, 4)
 
-    passed = score >= topic_entry["minimum_score"]
+    passed = composite_score >= topic_entry["minimum_score"]
     entry = {
         "topic_id": topic_entry["id"],
-        "score": round(score, 4),
+        "score": composite_score,
+        "semantic_score": round(semantic_score, 4),
+        "assertion_score": round(assertion_score, 4),
+        "assertion_flaws": assertion_flaws,
         "minimum_score": topic_entry["minimum_score"],
         "passed": passed,
         "latency_s": round(latency, 2),
@@ -113,10 +161,12 @@ async def eval_topic(topic_entry: dict, model: str) -> dict:
         f.write(json.dumps(entry) + "\n")
 
     status = "PASS" if passed else "FAIL"
+    flaws_str = f" flaws={assertion_flaws}" if assertion_flaws else ""
     print(
-        f"  [{status}] {topic_entry['id']}: score={score:.3f} "
+        f"  [{status}] {topic_entry['id']}: composite={composite_score:.3f} "
+        f"(semantic={semantic_score:.3f}, assertion={assertion_score:.3f}) "
         f"(min={topic_entry['minimum_score']}) latency={latency:.1f}s "
-        f"phase2_skipped={smart_phase_skipped}"
+        f"phase2_skipped={smart_phase_skipped}{flaws_str}"
     )
     return entry
 
