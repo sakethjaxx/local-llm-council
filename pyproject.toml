@@ -37,3 +37,12 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 council = ["agent_prompts/**/*", "demo_samples/*", "migrations/*.sql", "presets.json", "static/*"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+    "ignore:.*Pydantic serializer warnings.*:UserWarning",
+    "ignore:builtin type SwigPy.*:DeprecationWarning",
+    "ignore:builtin type swigvarlink.*:DeprecationWarning",
+]
