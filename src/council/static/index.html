@@ -72,6 +72,13 @@
       <div>
         <div class="section-title">3. Context / Topic</div>
         <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or review request..."></textarea>
+        <div class="prompt-chips" id="promptChips">
+          <button type="button" class="chip" onclick="insertPromptTemplate('security')">🛡️ Security Audit</button>
+          <button type="button" class="chip" onclick="insertPromptTemplate('perf')">⚡ Perf Bottlenecks</button>
+          <button type="button" class="chip" onclick="insertPromptTemplate('refactor')">🧩 Refactor Plan</button>
+          <button type="button" class="chip" onclick="insertPromptTemplate('pr')">💻 PR Review</button>
+          <button type="button" class="chip" onclick="insertPromptTemplate('incident')">🚨 Incident Triage</button>
+        </div>
         <div class="helper-copy">Attach code files, markdown, JSON, PDFs, or photos.</div>
         <input type="file" id="attachmentInput" aria-label="Attach files for council review" multiple accept=".md,.markdown,.json,.txt,.pdf,.py,.pyi,.js,.jsx,.ts,.tsx,.html,.css,.scss,.yaml,.yml,.toml,.go,.rs,.java,.c,.cpp,.h,.sh,.sql,.csv,.log,image/*">
         <div class="file-list" id="fileList"></div>
@@ -217,8 +224,13 @@
         <button class="btn btn-small" onclick="closeReplayModal()">X</button>
       </div>
       <div class="replay-layout">
-        <div class="replay-sidebar" id="replayRunList">
-          <div class="replay-empty">Loading past runs...</div>
+        <div class="replay-sidebar">
+          <div class="replay-search-box">
+            <input type="text" id="replaySearchInput" class="replay-search-input" placeholder="Search past runs..." oninput="filterReplayRuns(this.value)">
+          </div>
+          <div id="replayRunList">
+            <div class="replay-empty">Loading past runs...</div>
+          </div>
         </div>
         <div class="replay-detail" id="replayRunDetail">
           <div class="replay-empty">Select a run to inspect its phases.</div>

@@ -760,6 +760,23 @@ function removeFile(index) {
   refreshPreflight();
 }
 
+const PROMPT_TEMPLATES = {
+  security: "Conduct an OWASP Top 10 security audit. Focus on authentication/authorization gaps, injection vectors, unauthenticated endpoints, and secrets exposure risk.",
+  perf: "Audit this codebase for runtime performance bottlenecks, memory pressure, unbounded loops, inefficient DB queries, and latency optimization opportunities.",
+  refactor: "Analyze this code for SOLID principles, coupling, code duplication, maintainability risks, and propose the top 3 highest-value refactoring steps.",
+  pr: "Review this pull request diff for correctness bugs, edge cases, breaking API changes, and code quality before merging.",
+  incident: "Triage this incident / error log. Identify the root cause, cascading failure vectors, immediate mitigation steps, and long-term prevention mechanisms."
+};
+
+function insertPromptTemplate(type) {
+  const textarea = document.getElementById('topicText');
+  if (!textarea) return;
+  const template = PROMPT_TEMPLATES[type] || '';
+  textarea.value = template;
+  textarea.focus();
+  showToast(`Inserted ${type.toUpperCase()} review template.`);
+}
+
 function renderSelectedFiles() {
   const fileList = document.getElementById('fileList');
   if (!fileList) return;
@@ -769,8 +786,9 @@ function renderSelectedFiles() {
   }
   fileList.innerHTML = selectedFiles.map((file, i) => {
     const sizeKb = Math.max(1, Math.round(file.size / 1024));
+    const estTokens = Math.max(1, Math.round(file.size / 4));
     return `<div class="file-row">
-      <span>${escapeHtml(file.name)} <span class="file-size">(${sizeKb} KB)</span></span>
+      <span>${escapeHtml(file.name)} <span class="file-size">(${sizeKb} KB)</span> <span class="file-token-chip">~${estTokens.toLocaleString()} tokens</span></span>
       <button class="remove-file-button" onclick="removeFile(${i})" title="Remove">X</button>
     </div>`;
   }).join('');
@@ -1023,6 +1041,115 @@ async function launchProjectReview() {
   }
 }
 
+let memberTokenStats = {};
+let latestChairmanPayload = null;
+
+function playCompletionChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, now); // D5
+    gain1.gain.setValueAtTime(0.10, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.3);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(880.00, now + 0.12); // A5
+    gain2.gain.setValueAtTime(0.12, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.55);
+  } catch (e) {}
+}
+
+function sendDesktopNotification(title, body) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    new Notification(title, { body });
+  } else if (Notification.permission !== "denied") {
+    Notification.requestPermission().then(permission => {
+      if (permission === "granted") new Notification(title, { body });
+    });
+  }
+}
+
+function toggleActionDone(checkbox, idx) {
+  const row = document.getElementById(`action-row-${idx}`);
+  if (row) {
+    if (checkbox.checked) row.classList.add('is-done');
+    else row.classList.remove('is-done');
+  }
+}
+
+async function copyVerdictForGitHub() {
+  if (!latestChairmanPayload) return showToast("No completed verdict to copy.");
+  const data = latestChairmanPayload;
+  let md = `## 👑 LLM Council Verdict: ${data.verdict || 'ANALYSIS COMPLETE'}\n\n`;
+  md += `**Risk Score:** \`${data.risk_score ?? 'N/A'}/10\`\n\n`;
+  
+  if (data.action_items && data.action_items.length) {
+    md += `### 📋 Required Action Items\n`;
+    data.action_items.forEach(item => {
+      md += `- [ ] ${item}\n`;
+    });
+    md += `\n`;
+  }
+  
+  if (data.consensus && data.consensus.length) {
+    md += `### ✅ Consensus\n`;
+    data.consensus.forEach(c => { md += `- ${c}\n`; });
+    md += `\n`;
+  }
+  
+  if (data.disputes && data.disputes.length) {
+    md += `### ⚠️ Disagreements & Risk Warnings\n`;
+    data.disputes.forEach(d => { md += `- ${d}\n`; });
+    md += `\n`;
+  }
+
+  md += `<details>\n<summary>🔍 Expand Individual Council Member Critiques</summary>\n\n`;
+  for (const [key, content] of Object.entries(rawCardContents)) {
+    if (!key.startsWith('chairman')) {
+      md += `#### ${key.toUpperCase()}\n\n${content}\n\n---\n`;
+    }
+  }
+  md += `</details>\n\n*Generated locally with [LLM Council](https://github.com/sakethjaxx/local-llm-council)*`;
+
+  try {
+    await navigator.clipboard.writeText(md);
+    showToast("📋 Copied GitHub PR Markdown to clipboard!");
+  } catch (e) {
+    showToast("Failed to copy to clipboard.");
+  }
+}
+
+async function copyVerdictForSlack() {
+  if (!latestChairmanPayload) return showToast("No completed verdict to copy.");
+  const data = latestChairmanPayload;
+  let text = `👑 *LLM Council Verdict:* ${data.verdict || 'COMPLETE'} (Risk: ${data.risk_score ?? 'N/A'}/10)\n\n`;
+  if (data.action_items && data.action_items.length) {
+    text += `*Action Items:*\n`;
+    data.action_items.forEach((item, i) => { text += `${i+1}. ${item}\n`; });
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("💬 Copied Slack summary to clipboard!");
+  } catch (e) {
+    showToast("Failed to copy to clipboard.");
+  }
+}
+
 function handleEvent(ev, panel) {
   if (ev.type === 'error') {
     const message = ev.message || 'The council run failed.';
@@ -1078,6 +1205,18 @@ function handleEvent(ev, panel) {
       
       if (!rawCardContents[key]) rawCardContents[key] = '';
       rawCardContents[key] += ev.chunk;
+
+      if (!memberTokenStats[key]) {
+        memberTokenStats[key] = { count: 0, startTime: performance.now() };
+      }
+      memberTokenStats[key].count++;
+      const speedEl = existing.querySelector('.card-speedometer');
+      if (speedEl) {
+        const elapsed = Math.max(0.1, (performance.now() - memberTokenStats[key].startTime) / 1000);
+        const tps = (memberTokenStats[key].count / elapsed).toFixed(1);
+        speedEl.textContent = `⚡ ${tps} tok/s · ${memberTokenStats[key].count} tok`;
+      }
+
       if (ev.member !== 'chairman') {
         body.innerHTML = renderMarkdown(rawCardContents[key]);
       } else {
@@ -1098,6 +1237,7 @@ function handleEvent(ev, panel) {
       const body = existing.querySelector('.card-body');
       try {
         const data = JSON.parse(ev.full_text);
+        latestChairmanPayload = data;
         let riskColor = "var(--accent)";
         if (data.risk_score >= 8) riskColor = "var(--danger)";
         else if (data.risk_score >= 5) riskColor = "var(--warm)";
@@ -1107,7 +1247,18 @@ function handleEvent(ev, panel) {
           <h2>VERDICT: ${escapeHtml(data.verdict || '')}</h2>
           <div class="risk-score" style="color: ${riskColor};">RISK SCORE: ${riskScore}/10</div>
           <h3>Action Items:</h3>
-          <ul>${(data.action_items || []).map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>
+          <div class="action-item-list">
+            ${(data.action_items || []).map((a, idx) => `
+              <label class="action-item-row" id="action-row-${idx}">
+                <input type="checkbox" class="action-checkbox" onchange="toggleActionDone(this, ${idx})">
+                <span class="action-text">${escapeHtml(a)}</span>
+              </label>
+            `).join('')}
+          </div>
+          <div style="display:flex; gap:8px; margin: 12px 0 16px 0; flex-wrap:wrap;">
+            <button class="btn btn-small copy-pr-btn" onclick="copyVerdictForGitHub()">📋 Copy for GitHub PR</button>
+            <button class="btn btn-small copy-pr-btn" onclick="copyVerdictForSlack()">💬 Copy for Slack</button>
+          </div>
         `;
         if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
         if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`;
@@ -1116,6 +1267,12 @@ function handleEvent(ev, panel) {
         body.innerHTML = renderMarkdown(ev.full_text);
       }
     }
+    return;
+  }
+
+  if (ev.type === 'done') {
+    playCompletionChime();
+    sendDesktopNotification("👑 Council Deliberation Complete", "Chairman has synthesized the verdict and action items.");
     return;
   }
 
@@ -1152,8 +1309,11 @@ function buildCard(member, meta, content, phase) {
   card.style.setProperty('--member-color', color);
   card.innerHTML = `
     <div class="card-header">
-      <div class="card-icon">${icon}</div>
-      <div class="card-name">${label}</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div class="card-icon">${icon}</div>
+        <div class="card-name">${label}</div>
+      </div>
+      <div class="card-speedometer" id="speed-${member}-${phase}">⚡ 0.0 tok/s</div>
     </div>
     <div class="typing"><span></span><span></span><span></span></div>
     <div class="card-body" style="display:none"></div>
@@ -1379,39 +1539,61 @@ function closeReplayModal() {
   document.getElementById('replayModal').style.display = 'none';
 }
 
+let allLoadedReplays = [];
+
 async function loadReplayRuns() {
   const list = document.getElementById('replayRunList');
   const detail = document.getElementById('replayRunDetail');
-  list.innerHTML = '<div class="replay-empty">Loading past runs...</div>';
-  detail.innerHTML = '<div class="replay-empty">Select a run to inspect its phases.</div>';
+  if (list) list.innerHTML = '<div class="replay-empty">Loading past runs...</div>';
+  if (detail) detail.innerHTML = '<div class="replay-empty">Select a run to inspect its phases.</div>';
 
   try {
-    const resp = await fetch('/runs?limit=25');
+    const resp = await fetch('/runs?limit=50');
     const data = await resp.json();
-    const runs = data.runs || [];
-    if (!runs.length) {
-      list.innerHTML = '<div class="replay-empty">No persisted runs yet.</div>';
-      return;
+    allLoadedReplays = data.runs || [];
+    renderFilteredReplays(allLoadedReplays);
+    if (allLoadedReplays.length > 0) {
+      await loadReplayRunDetail(allLoadedReplays[0].run_id);
     }
-
-    list.innerHTML = runs.map(run => {
-      const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
-      const topic = escapeHtml((run.topic || '').slice(0, 72) || 'Untitled run');
-      return `
-        <div class="replay-run-item" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-            <div class="replay-run-title">${topic}</div>
-            <button class="btn btn-small btn-danger replay-delete-btn" onclick="event.stopPropagation(); deleteSingleReplay('${escapeHtml(run.run_id)}')" title="Delete this run">🗑️</button>
-          </div>
-          <div class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</div>
-        </div>
-      `;
-    }).join('');
-
-    await loadReplayRunDetail(runs[0].run_id);
   } catch (e) {
-    list.innerHTML = '<div class="replay-empty">Failed to load persisted runs.</div>';
+    if (list) list.innerHTML = '<div class="replay-empty">Failed to load persisted runs.</div>';
   }
+}
+
+function filterReplayRuns(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) {
+    renderFilteredReplays(allLoadedReplays);
+    return;
+  }
+  const filtered = allLoadedReplays.filter(r => 
+    (r.topic || '').toLowerCase().includes(q) || 
+    (r.run_id || '').toLowerCase().includes(q) ||
+    (r.status || '').toLowerCase().includes(q)
+  );
+  renderFilteredReplays(filtered);
+}
+
+function renderFilteredReplays(runs) {
+  const list = document.getElementById('replayRunList');
+  if (!list) return;
+  if (!runs.length) {
+    list.innerHTML = '<div class="replay-empty">No matching runs found.</div>';
+    return;
+  }
+  list.innerHTML = runs.map(run => {
+    const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
+    const topic = escapeHtml((run.topic || '').slice(0, 72) || 'Untitled run');
+    return `
+      <div class="replay-run-item" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+          <div class="replay-run-title">${topic}</div>
+          <button class="btn btn-small btn-danger replay-delete-btn" onclick="event.stopPropagation(); deleteSingleReplay('${escapeHtml(run.run_id)}')" title="Delete this run">🗑️</button>
+        </div>
+        <div class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</div>
+      </div>
+    `;
+  }).join('');
 }
 
 async function deleteSingleReplay(runId) {
