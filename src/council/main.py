@@ -879,6 +879,7 @@ async def get_metrics_quality(limit: int = 100):
 
 
 def start():
+    import socket
     import uvicorn
 
     host = os.getenv("COUNCIL_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -891,9 +892,19 @@ def start():
             "Set COUNCIL_API_KEY or use COUNCIL_HOST=127.0.0.1"
         )
 
+    # Check if the port is already occupied by a previous session
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        if s.connect_ex((host, port)) == 0:
+            print(f"\n⚠️  Port {port} is already in use by another process.")
+            print(f"👉 Free the port with:  lsof -ti :{port} | xargs kill -9")
+            print(f"👉 Or use a different port:  COUNCIL_PORT=8766 python run.py\n")
+            raise SystemExit(1)
+
     # Auto-reload watches the filesystem and drops active SSE streams on any
     # file change (e.g. the sandbox temp file) — off by default, opt-in for dev.
     reload = os.getenv("COUNCIL_RELOAD", "false").strip().lower() == "true"
+    print(f"\n🚀 LLM Council starting on http://{host}:{port}")
     uvicorn.run("council.main:app", host=host, port=port, reload=reload)
 
 
