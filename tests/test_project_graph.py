@@ -46,6 +46,34 @@ class ProjectGraphTests(unittest.TestCase):
             self.assertIn("standalone.py", data["stats"]["isolated"])
             self.assertIn("PROJECT CODE GRAPH", data["summary"])
 
+    def test_build_project_graph_with_nested_subpackages_and_relative_imports(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pkg = root / "src" / "council"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "embeddings.py").write_text("def get_embedder(): pass\n", encoding="utf-8")
+            (pkg / "main.py").write_text("from .embeddings import get_embedder\nfrom embeddings import get_embedder\n", encoding="utf-8")
+            (root / "run.py").write_text("from src.council.main import app\n", encoding="utf-8")
+
+            graph = build_project_graph(root)
+            self.assertEqual(graph.number_of_nodes(), 4)
+            # Both relative and sibling imports connect main.py to embeddings.py
+            self.assertEqual(graph.predecessors("src/council/embeddings.py"), ["src/council/main.py"])
+            self.assertEqual(graph.predecessors("src/council/main.py"), ["run.py"])
+
+    def test_build_project_graph_package_init_resolution(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pkg = root / "src" / "my_pkg"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("VERSION = '1.0'\n", encoding="utf-8")
+            (root / "app.py").write_text("import my_pkg\n", encoding="utf-8")
+
+            graph = build_project_graph(root)
+            self.assertEqual(graph.number_of_nodes(), 2)
+            self.assertEqual(graph.predecessors("src/my_pkg/__init__.py"), ["app.py"])
+
 
 if __name__ == "__main__":
     unittest.main()

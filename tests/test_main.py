@@ -625,6 +625,18 @@ class MainApiTests(unittest.IsolatedAsyncioTestCase):
                     main._confine_to_project_root(escaped)
             self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_confine_to_project_root_blocks_sensitive_prefixes_when_root_unset(self):
+        from fastapi import HTTPException
+
+        env = dict(os.environ)
+        env.pop("COUNCIL_PROJECT_ROOT", None)
+        with patch.dict(os.environ, env, clear=True):
+            for blocked_path in ("/etc/shadow", "/etc", "/sys/devices", os.path.expanduser("~/.ssh/id_rsa")):
+                with self.assertRaises(HTTPException) as ctx:
+                    main._confine_to_project_root(blocked_path)
+                self.assertEqual(ctx.exception.status_code, 403)
+
+
     async def test_ingest_folder_endpoint_confines_path_and_clamps_file_count(self):
         with patch.dict(os.environ, {"COUNCIL_PROJECT_ROOT": "/home/user/local-llm-council"}):
             with self.assertRaises(main.HTTPException) as ctx:

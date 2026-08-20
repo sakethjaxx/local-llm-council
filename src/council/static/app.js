@@ -1095,8 +1095,9 @@ function toggleActionDone(checkbox, idx) {
 async function copyVerdictForGitHub() {
   if (!latestChairmanPayload) return showToast("No completed verdict to copy.");
   const data = latestChairmanPayload;
-  let md = `## 👑 LLM Council Verdict: ${data.verdict || 'ANALYSIS COMPLETE'}\n\n`;
-  md += `**Risk Score:** \`${data.risk_score ?? 'N/A'}/10\`\n\n`;
+  const isUncalibrated = data.risk_score === -1 || data.risk_score === '-1' || data.risk_score === null || data.risk_score === undefined;
+  const riskDisplay = isUncalibrated ? '⚠️ Uncalibrated' : `${data.risk_score}/10`;
+  md += `**Risk Score:** \`${riskDisplay}\`\n\n`;
   
   if (data.action_items && data.action_items.length) {
     md += `### 📋 Required Action Items\n`;
@@ -1137,7 +1138,9 @@ async function copyVerdictForGitHub() {
 async function copyVerdictForSlack() {
   if (!latestChairmanPayload) return showToast("No completed verdict to copy.");
   const data = latestChairmanPayload;
-  let text = `👑 *LLM Council Verdict:* ${data.verdict || 'COMPLETE'} (Risk: ${data.risk_score ?? 'N/A'}/10)\n\n`;
+  const isUncalibrated = data.risk_score === -1 || data.risk_score === '-1' || data.risk_score === null || data.risk_score === undefined;
+  const riskDisplay = isUncalibrated ? '⚠️ Uncalibrated' : `${data.risk_score}/10`;
+  let text = `👑 *LLM Council Verdict:* ${data.verdict || 'COMPLETE'} (Risk: ${riskDisplay})\n\n`;
   if (data.action_items && data.action_items.length) {
     text += `*Action Items:*\n`;
     data.action_items.forEach((item, i) => { text += `${i+1}. ${item}\n`; });
@@ -1242,10 +1245,11 @@ function handleEvent(ev, panel) {
         if (data.risk_score >= 8) riskColor = "var(--danger)";
         else if (data.risk_score >= 5) riskColor = "var(--warm)";
 
-        const riskScore = escapeHtml(data.risk_score ?? '');
+        const isUncalibrated = data.risk_score === -1 || data.risk_score === '-1' || data.risk_score === null || data.risk_score === undefined;
+        const riskDisplay = isUncalibrated ? '⚠️ Uncalibrated' : `${escapeHtml(data.risk_score)}/10`;
         let html = `
           <h2>VERDICT: ${escapeHtml(data.verdict || '')}</h2>
-          <div class="risk-score" style="color: ${riskColor};">RISK SCORE: ${riskScore}/10</div>
+          <div class="risk-score" style="color: ${riskColor};">RISK SCORE: ${riskDisplay}</div>
           <h3>Action Items:</h3>
           <div class="action-item-list">
             ${(data.action_items || []).map((a, idx) => `
@@ -1632,9 +1636,11 @@ function formatReplayPhaseOutput(phase, runId) {
   if (phase.phase === 3 && phase.member_id === 'chairman') {
     try {
       const data = JSON.parse(phase.output || '{}');
+      const isUncalibrated = data.risk_score === -1 || data.risk_score === '-1' || data.risk_score === null || data.risk_score === undefined;
+      const riskDisplay = isUncalibrated ? '⚠️ Uncalibrated' : `${escapeHtml(String(data.risk_score))}/10`;
       return `
         <h3>Verdict: ${escapeHtml(data.verdict || 'unknown')}</h3>
-        <p><strong>Risk score:</strong> ${escapeHtml(String(data.risk_score ?? 'n/a'))}</p>
+        <p><strong>Risk score:</strong> ${riskDisplay}</p>
         <p><strong>Action items:</strong></p>
         <ul>${(data.action_items || []).map((item, index) => `
           <li>${escapeHtml(item)}

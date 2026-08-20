@@ -5,14 +5,14 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-Local--First-black?style=for-the-badge&logo=ollama&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-165%20passed-success?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-180%20passed-success?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 
 **A hardware-aware, local-first multi-model review and decision engine for consumer machines.**
 
 *Run multi-agent debates locally in Ollama without VRAM thrashing, context truncation, or cloud lock-in.*
 
-[Quick Start](#-quick-start-in-60-seconds) • [Killer USPs](#-the-4-killer-usps) • [Architecture](#-system-architecture) • [Pre-Commit Hook](#-git-pre-commit-hook--blast-radius) • [Configuration](#-configuration-env)
+[Quick Start](#-quick-start-in-60-seconds) • [Killer USPs](#-the-4-killer-usps) • [Architecture](#-system-architecture) • [CLI & Pre-Commit Hook](#-cli--git-pre-commit-hook) • [Configuration](#-configuration-env)
 
 </div>
 
@@ -54,7 +54,7 @@ Extracts knowledge triples `(Subject -> Predicate -> Object)` with temporal deca
 
 ### 1. Clone & Setup
 ```bash
-git clone https://github.com/<your-username>/local-llm-council.git
+git clone https://github.com/sakethjaxx/local-llm-council.git
 cd local-llm-council
 python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -74,26 +74,24 @@ Open **`http://localhost:8765`** in your browser.
 
 ---
 
-## 🖥️ Web UI Features
+## 💻 CLI & Git Pre-Commit Hook
 
-- **⚡ Live SSE Streaming:** Real-time token streaming with animated cards and phase progress.
-- **📁 Drag-and-Drop Ingest:** Drop Markdown, Python, TS, Go, Rust, Java, C++, SQL, PDFs, or photos directly onto the input.
-- **🛑 Instant Stream Abort:** Click "Stop Council" to cancel long runs cleanly without zombie requests.
-- **⌨️ Keyboard Shortcuts:**
-  - `Cmd + Enter` / `Ctrl + Enter`: Run Council or Project Review.
-  - `Escape`: Close active modals.
-- **📥 1-Click Model Library:** Browse and pull Ollama models sized for your machine with live download progress bars.
-- **💬 Interactive Peer Chat:** Click any council seat (Architect, Security, Perf) to have a 1-on-1 follow-up discussion.
-- **📦 Replay & Export:** Full run history stored in SQLite; export reports to Markdown, JSON, or ZIP archives.
-
----
-
-## 💻 Git Pre-Commit Hook & Blast Radius
-
-Integrate LLM Council into your development workflow:
+LLM Council provides a rich CLI for automated checks, terminal prompts, and repository reviews:
 
 ```bash
-# Test staged changes manually:
+# 1. Ask a question or run an architecture deliberation
+python src/council/cli.py ask "Should we migrate from Postgres to SQLite WAL for this service?"
+
+# 2. Review a file or directory with AST dependency graph
+python src/council/cli.py review ./src/council/orchestrator.py
+
+# 3. View recent council deliberation history
+python src/council/cli.py history
+
+# 4. View detected hardware profile and suggested model roster
+python src/council/cli.py models
+
+# 5. Pre-commit check on staged changes
 python src/council/cli.py check_diff
 
 # Or install as a native git pre-commit hook:

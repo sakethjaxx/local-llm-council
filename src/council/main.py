@@ -163,12 +163,35 @@ def _reject_if_overloaded() -> None:
         raise HTTPException(status_code=429, detail="Server busy: too many concurrent council runs")
 
 
+_BLOCKED_PATH_PREFIXES = (
+    os.path.expanduser("~/.ssh"),
+    os.path.expanduser("~/.aws"),
+    os.path.expanduser("~/.gnupg"),
+    os.path.expanduser("~/.kube"),
+    os.path.expanduser("~/.docker"),
+    "/etc",
+    "/sys",
+    "/proc",
+    "/dev",
+    "/root",
+    "/var/root",
+    "/private/etc",
+)
+
+
 def _confine_to_project_root(candidate: str) -> str:
     """Resolve a caller-supplied path. If COUNCIL_PROJECT_ROOT env var is set,
     confines execution to that directory tree for security."""
     # Resolve symlinks before comparing paths: an in-root symlink can otherwise
     # point outside COUNCIL_PROJECT_ROOT and bypass the intended sandbox.
     resolved = os.path.realpath(candidate)
+    for blocked in _BLOCKED_PATH_PREFIXES:
+        if blocked and (resolved == blocked or resolved.startswith(blocked + os.sep)):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access to sensitive directory is forbidden: {blocked}"
+            )
+
     allowed_root = os.getenv("COUNCIL_PROJECT_ROOT")
     if allowed_root:
         root = os.path.realpath(allowed_root)

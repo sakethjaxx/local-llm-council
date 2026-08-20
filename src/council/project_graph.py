@@ -159,12 +159,64 @@ def _resolve_reference(ref: str, from_rel: str, known_rel_paths: set[str]):
             yield candidate
 
 
+def _resolve_python_import(module_name: str | None, from_rel: str, known_rel_paths: set[str], level: int = 0) -> str | None:
+    if not module_name and level == 0:
+        return None
+
+    rel_mod = _relative_module_path(module_name) if module_name else ""
+    from_dir = os.path.dirname(from_rel)
+
+    # 1. Relative import resolution (level > 0, e.g. "from .foo import ...")
+    if level > 0:
+        target_dir = from_dir
+        for _ in range(level - 1):
+            target_dir = os.path.dirname(target_dir)
+        if rel_mod:
+            candidate = os.path.normpath(os.path.join(target_dir, rel_mod)).replace(os.sep, "/")
+            if candidate in known_rel_paths:
+                return candidate
+        else:
+            candidate = os.path.normpath(os.path.join(target_dir, "__init__.py")).replace(os.sep, "/")
+            if candidate in known_rel_paths:
+                return candidate
+
+    # 2. Direct root match (e.g. "council/orchestrator.py")
+    if rel_mod and rel_mod in known_rel_paths:
+        return rel_mod
+
+    # 3. Package __init__.py match (e.g. "council" -> "council/__init__.py")
+    if module_name:
+        init_candidate = module_name.replace(".", "/") + "/__init__.py"
+        if init_candidate in known_rel_paths:
+            return init_candidate
+
+    # 4. Sibling/same-package match (e.g. "from orchestrator import ..." inside src/council/)
+    if from_dir and rel_mod:
+        candidate = os.path.normpath(os.path.join(from_dir, rel_mod)).replace(os.sep, "/")
+        if candidate in known_rel_paths:
+            return candidate
+
+    # 5. Suffix-match fallback across known paths (e.g. "src/council/orchestrator.py" matches "council/orchestrator.py" or "orchestrator.py")
+    if rel_mod:
+        for known in known_rel_paths:
+            if known == rel_mod or known.endswith("/" + rel_mod):
+                return known
+
+    if module_name:
+        init_candidate = module_name.replace(".", "/") + "/__init__.py"
+        for known in known_rel_paths:
+            if known == init_candidate or known.endswith("/" + init_candidate):
+                return known
+
+    return None
+
+
 def build_project_graph(repo_root: str | Path = ".") -> ProjectGraph:
     root = Path(repo_root).resolve()
     graph = ProjectGraph()
 
     source_files = list(_iter_source_files(root))
-    rel_paths = {path: str(path.relative_to(root)) for path in source_files}
+    rel_paths = {path: str(path.relative_to(root)).replace(os.sep, "/") for path in source_files}
     known_rel_paths = set(rel_paths.values())
 
     for path, rel_path in rel_paths.items():
@@ -183,13 +235,13 @@ def build_project_graph(repo_root: str | Path = ".") -> ProjectGraph:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for name in node.names:
-                        imported = _relative_module_path(name.name)
-                        if imported in known_rel_paths:
-                            graph.add_edge(rel_path, imported, kind="import")
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    imported = _relative_module_path(node.module)
-                    if imported in known_rel_paths:
-                        graph.add_edge(rel_path, imported, kind="import_from")
+                        target = _resolve_python_import(name.name, rel_path, known_rel_paths, level=0)
+                        if target and target != rel_path:
+                            graph.add_edge(rel_path, target, kind="import")
+                elif isinstance(node, ast.ImportFrom):
+                    target = _resolve_python_import(node.module, rel_path, known_rel_paths, level=getattr(node, "level", 0))
+                    if target and target != rel_path:
+                        graph.add_edge(rel_path, target, kind="import_from")
         else:
             for ref in _iter_text_references(content):
                 for candidate in _resolve_reference(ref, rel_path, known_rel_paths):
