@@ -222,43 +222,7 @@ def _pick_mixed_roster(pool: list[str], budget: float) -> tuple[list[str], str] 
     return analysts, chairman
 
 
-def _pick_roster(
-    total_ram_gb: float,
-    installed: list[str] | None,
-    requested_strategy: str = "auto",
-) -> dict:
-    """Choose the best-fitting roster for the concurrent memory budget."""
-    reserve = _reserve_gb(total_ram_gb)
-    budget = total_ram_gb - reserve
-
-    inst = set(installed or [])
-    # Prefer models we can actually run right now; fall back to the full known
-    # list (and recommend pulling) if nothing suitable is installed.
-    available = [m for m in _PREF if m in inst] if inst else []
-    from_installed = bool(available)
-    pool = available if from_installed else list(_BOOTSTRAP_PREF)
-
-    if requested_strategy not in {"auto", "shared", "diverse", "mixed"}:
-        requested_strategy = "auto"
-
-    if requested_strategy == "mixed":
-        mixed = _pick_mixed_roster(pool, budget)
-        if mixed:
-            seats, chairman = mixed
-            strategy = "mixed"
-            roster_models = list(dict.fromkeys(seats + [chairman]))
-            analyst_peak = sum(
-                _get_model_gb(model) for model in dict.fromkeys(seats)
-            ) * _EFF
-            reason = (
-                f"Small analyst models use about {analyst_peak:.1f}GB in Phase 1; "
-                f"{chairman.split('/')[-1]} is the strongest model that fits the "
-                f"~{budget:.0f}GB chairman phase. It reloads before synthesis."
-            )
-        else:
-            requested_strategy = "shared"
-
-    # --- Try real diversity: distinct STRONG models that fit concurrently. ---
+def _pick_diverse_roster(pool: list[str], budget: float) -> tuple[list[str], str, list[str], str] | None:
     diverse: list[str] = []
     total_w = 0.0
     for m in pool:
@@ -271,31 +235,78 @@ def _pick_roster(
             diverse.append(m)
             total_w += m_gb
 
-    if requested_strategy != "shared" and requested_strategy != "mixed" and len(diverse) >= 2:
-        seats = list(diverse)
-        while len(seats) < 3:
-            seats.append(seats[-1])  # reuse an already-resident model, no new load
-        chairman = diverse[0]        # strongest fitted model synthesizes
-        strategy = "diverse"
-        roster_models = list(dict.fromkeys(diverse + [chairman]))
-        reason = (
-            f"{len(diverse)} distinct models fit the ~{budget:.0f}GB concurrent "
-            f"budget — running a genuinely diverse council."
-        )
-    elif requested_strategy != "mixed":
-        # --- Single best-fit model shared across every seat (stays resident). ---
-        best = next((m for m in pool if _fits(_get_model_gb(m), budget)), None)
-        if best is None:
-            best = pool[-1]  # nothing fits cleanly; best-effort smallest
-        seats = [best, best, best]
-        chairman = best
+    if len(diverse) < 2:
+        return None
+
+    seats = list(diverse)
+    while len(seats) < 3:
+        seats.append(seats[-1])
+    chairman = diverse[0]
+    roster_models = list(dict.fromkeys(diverse + [chairman]))
+    reason = (
+        f"{len(diverse)} distinct models fit the ~{budget:.0f}GB concurrent "
+        f"budget — running a genuinely diverse council."
+    )
+    return seats, chairman, roster_models, reason
+
+
+def _pick_shared_roster(pool: list[str], budget: float) -> tuple[list[str], str, list[str], str]:
+    best = next((m for m in pool if _fits(_get_model_gb(m), budget)), None)
+    if best is None:
+        best = pool[-1]
+    seats = [best, best, best]
+    chairman = best
+    roster_models = [best]
+    reason = (
+        f"A diverse roster would exceed the ~{budget:.0f}GB concurrent memory "
+        f"budget and thrash, so all seats share {best.split('/')[-1]} — it "
+        f"stays resident for fast, reliable runs."
+    )
+    return seats, chairman, roster_models, reason
+
+
+def _pick_roster(
+    total_ram_gb: float,
+    installed: list[str] | None,
+    requested_strategy: str = "auto",
+) -> dict:
+    """Choose the best-fitting roster for the concurrent memory budget."""
+    reserve = _reserve_gb(total_ram_gb)
+    budget = total_ram_gb - reserve
+
+    inst = set(installed or [])
+    available = [m for m in _PREF if m in inst] if inst else []
+    from_installed = bool(available)
+    pool = available if from_installed else list(_BOOTSTRAP_PREF)
+
+    if requested_strategy not in {"auto", "shared", "diverse", "mixed"}:
+        requested_strategy = "auto"
+
+    strategy = "shared"
+    seats, chairman, roster_models, reason = None, None, None, None
+
+    if requested_strategy == "mixed":
+        mixed = _pick_mixed_roster(pool, budget)
+        if mixed:
+            seats, chairman = mixed
+            strategy = "mixed"
+            roster_models = list(dict.fromkeys(seats + [chairman]))
+            analyst_peak = sum(_get_model_gb(m) for m in dict.fromkeys(seats)) * _EFF
+            reason = (
+                f"Small analyst models use about {analyst_peak:.1f}GB in Phase 1; "
+                f"{chairman.split('/')[-1]} is the strongest model that fits the "
+                f"~{budget:.0f}GB chairman phase. It reloads before synthesis."
+            )
+
+    if seats is None and requested_strategy in {"auto", "diverse"}:
+        diverse_res = _pick_diverse_roster(pool, budget)
+        if diverse_res is not None:
+            seats, chairman, roster_models, reason = diverse_res
+            strategy = "diverse"
+
+    if seats is None:
+        seats, chairman, roster_models, reason = _pick_shared_roster(pool, budget)
         strategy = "shared"
-        roster_models = [best]
-        reason = (
-            f"A diverse roster would exceed the ~{budget:.0f}GB concurrent memory "
-            f"budget and thrash, so all seats share {best.split('/')[-1]} — it "
-            f"stays resident for fast, reliable runs."
-        )
 
     config = _build_config(seats[0], seats[1], seats[2], chairman)
     to_pull = [m for m in roster_models if m not in inst]

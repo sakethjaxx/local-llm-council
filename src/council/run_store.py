@@ -10,7 +10,6 @@ from db import db_connect
 from logging_utils import get_logger
 from provider_caps import redact_config, scrub_secret_values
 
-
 DB_PATH = os.getenv("COUNCIL_DB_PATH", "data/council_runs.db")
 logger = get_logger(__name__)
 
@@ -115,6 +114,132 @@ class StoredRun:
     error: Optional[str]
 
 
+def _apply_migration(conn, version: str, description: str, migration) -> None:
+    row = conn.execute(
+        "SELECT version FROM schema_migrations WHERE version = ?",
+        (version,),
+    ).fetchone()
+    if row is not None:
+        return
+    migration(conn)
+    conn.execute(
+        "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+        (version, description, time.time()),
+    )
+    logger.info("schema_migration_applied", extra={"version": version, "description": description})
+
+
+def _migrate_runs(conn):
+    cursor = conn.execute("PRAGMA table_info(runs)")
+    cols = {row[1] for row in cursor.fetchall()}
+    if "smart_phase_score" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN smart_phase_score REAL")
+
+
+def _migrate_phase_outputs(conn):
+    cursor = conn.execute("PRAGMA table_info(phase_outputs)")
+    cols = {row[1] for row in cursor.fetchall()}
+    if "finish_reason" not in cols:
+        conn.execute("ALTER TABLE phase_outputs ADD COLUMN finish_reason TEXT")
+    if "attempt_number" not in cols:
+        conn.execute("ALTER TABLE phase_outputs ADD COLUMN attempt_number INTEGER NOT NULL DEFAULT 1")
+
+
+def _migrate_quality_metrics(conn):
+    cursor = conn.execute("PRAGMA table_info(runs)")
+    cols = {row[1] for row in cursor.fetchall()}
+    if "parse_tier" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN parse_tier TEXT")
+    if "phase1_divergence" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN phase1_divergence REAL")
+    if "specificity_score" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN specificity_score REAL")
+
+
+def init_run_store_db(conn):
+    conn.executescript(SCHEMA)
+    _apply_migration(conn, "001_smart_phase_score", "Add smart phase score to runs", _migrate_runs)
+    _apply_migration(conn, "002_phase_output_observability", "Add finish reason and attempt number", _migrate_phase_outputs)
+    _apply_migration(conn, "003_quality_metrics", "Add quality metric columns to runs", _migrate_quality_metrics)
+
+
+def _run_row_to_dict(row) -> dict:
+    stored = StoredRun(
+        run_id=row["run_id"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        status=row["status"],
+        topic=row["topic"],
+        roster=json.loads(row["roster_json"] or "{}"),
+        fingerprint_hash=row["fingerprint_hash"],
+        deep_debate=bool(row["deep_debate"]),
+        smart_phase_score=row["smart_phase_score"],
+        parse_tier=row["parse_tier"],
+        phase1_divergence=row["phase1_divergence"],
+        specificity_score=row["specificity_score"],
+        error=row["error"],
+    )
+    return asdict(stored)
+
+
+def fetch_run_by_id(conn: sqlite3.Connection, run_id: str) -> dict:
+    run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    if run is None:
+        return {}
+    phases = conn.execute(
+        "SELECT * FROM phase_outputs WHERE run_id = ? ORDER BY phase, member_id",
+        (run_id,),
+    ).fetchall()
+    feedback = conn.execute(
+        "SELECT * FROM run_feedback WHERE run_id = ? ORDER BY action_index",
+        (run_id,),
+    ).fetchall()
+    result = _run_row_to_dict(run)
+    result["phases"] = [dict(row) for row in phases]
+    result["feedback"] = [dict(row) for row in feedback]
+    return result
+
+
+def fetch_runs_list(conn: sqlite3.Connection, limit: int, fingerprint_hash: Optional[str]) -> list[dict]:
+    if fingerprint_hash:
+        rows = conn.execute(
+            "SELECT * FROM runs WHERE fingerprint_hash = ? ORDER BY started_at DESC LIMIT ?",
+            (fingerprint_hash, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [_run_row_to_dict(row) for row in rows]
+
+
+def _summarize_quality_metrics(runs: list[dict]) -> dict:
+    completed = [row for row in runs if row.get("status") == "completed"]
+    specificity_values = [
+        float(row["specificity_score"]) for row in completed if row.get("specificity_score") is not None
+    ]
+    divergence_values = [
+        float(row["phase1_divergence"]) for row in completed if row.get("phase1_divergence") is not None
+    ]
+    parse_tiers: dict[str, int] = {}
+    for row in completed:
+        tier = row.get("parse_tier") or "unknown"
+        parse_tiers[tier] = parse_tiers.get(tier, 0) + 1
+
+    return {
+        "runs_seen": len(runs),
+        "completed_runs": len(completed),
+        "avg_specificity_score": (
+            sum(specificity_values) / len(specificity_values) if specificity_values else None
+        ),
+        "avg_phase1_divergence": (
+            sum(divergence_values) / len(divergence_values) if divergence_values else None
+        ),
+        "parse_tiers": parse_tiers,
+    }
+
+
 class RunStore:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
@@ -140,50 +265,9 @@ class RunStore:
     def _init_db(self):
         try:
             with self._connection() as conn:
-                conn.executescript(SCHEMA)
-                self._apply_migration(conn, "001_smart_phase_score", "Add smart phase score to runs", self._migrate_runs)
-                self._apply_migration(conn, "002_phase_output_observability", "Add finish reason and attempt number", self._migrate_phase_outputs)
-                self._apply_migration(conn, "003_quality_metrics", "Add quality metric columns to runs", self._migrate_quality_metrics)
+                init_run_store_db(conn)
         except Exception as exc:
             logger.exception("run_store_init_failed", extra={"error": str(exc)})
-
-    def _apply_migration(self, conn, version: str, description: str, migration) -> None:
-        row = conn.execute(
-            "SELECT version FROM schema_migrations WHERE version = ?",
-            (version,),
-        ).fetchone()
-        if row is not None:
-            return
-        migration(conn)
-        conn.execute(
-            "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
-            (version, description, time.time()),
-        )
-        logger.info("schema_migration_applied", extra={"version": version, "description": description})
-
-    def _migrate_runs(self, conn):
-        cursor = conn.execute("PRAGMA table_info(runs)")
-        cols = {row[1] for row in cursor.fetchall()}
-        if "smart_phase_score" not in cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN smart_phase_score REAL")
-
-    def _migrate_phase_outputs(self, conn):
-        cursor = conn.execute("PRAGMA table_info(phase_outputs)")
-        cols = {row[1] for row in cursor.fetchall()}
-        if "finish_reason" not in cols:
-            conn.execute("ALTER TABLE phase_outputs ADD COLUMN finish_reason TEXT")
-        if "attempt_number" not in cols:
-            conn.execute("ALTER TABLE phase_outputs ADD COLUMN attempt_number INTEGER NOT NULL DEFAULT 1")
-
-    def _migrate_quality_metrics(self, conn):
-        cursor = conn.execute("PRAGMA table_info(runs)")
-        cols = {row[1] for row in cursor.fetchall()}
-        if "parse_tier" not in cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN parse_tier TEXT")
-        if "phase1_divergence" not in cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN phase1_divergence REAL")
-        if "specificity_score" not in cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN specificity_score REAL")
 
     def begin_run(self, run_id, topic, roster, deep_debate, fingerprint_hash=None) -> None:
         try:
@@ -335,36 +419,12 @@ class RunStore:
 
     def get_run(self, run_id: str) -> dict:
         with self._connection() as conn:
-            run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-            if run is None:
-                return {}
-            phases = conn.execute(
-                "SELECT * FROM phase_outputs WHERE run_id = ? ORDER BY phase, member_id",
-                (run_id,),
-            ).fetchall()
-            feedback = conn.execute(
-                "SELECT * FROM run_feedback WHERE run_id = ? ORDER BY action_index",
-                (run_id,),
-            ).fetchall()
-        result = self._run_row_to_dict(run)
-        result["phases"] = [dict(row) for row in phases]
-        result["feedback"] = [dict(row) for row in feedback]
-        return result
+            return fetch_run_by_id(conn, run_id)
 
     def list_runs(self, limit: int = 50, fingerprint_hash: Optional[str] = None) -> list[dict]:
         limit = max(1, min(int(limit), 500))
         with self._connection() as conn:
-            if fingerprint_hash:
-                rows = conn.execute(
-                    "SELECT * FROM runs WHERE fingerprint_hash = ? ORDER BY started_at DESC LIMIT ?",
-                    (fingerprint_hash, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-        return [self._run_row_to_dict(row) for row in rows]
+            return fetch_runs_list(conn, limit, fingerprint_hash)
 
     def delete_run(self, run_id: str):
         with self._connection() as conn:
@@ -398,54 +458,13 @@ class RunStore:
             ).fetchall()
 
         runs = [dict(row) for row in rows]
-        completed = [row for row in runs if row.get("status") == "completed"]
-        specificity_values = [
-            float(row["specificity_score"])
-            for row in completed
-            if row.get("specificity_score") is not None
-        ]
-        divergence_values = [
-            float(row["phase1_divergence"])
-            for row in completed
-            if row.get("phase1_divergence") is not None
-        ]
-        parse_tiers: dict[str, int] = {}
-        for row in completed:
-            tier = row.get("parse_tier") or "unknown"
-            parse_tiers[tier] = parse_tiers.get(tier, 0) + 1
-
         return {
             "runs": runs,
-            "summary": {
-                "runs_seen": len(runs),
-                "completed_runs": len(completed),
-                "avg_specificity_score": (
-                    sum(specificity_values) / len(specificity_values) if specificity_values else None
-                ),
-                "avg_phase1_divergence": (
-                    sum(divergence_values) / len(divergence_values) if divergence_values else None
-                ),
-                "parse_tiers": parse_tiers,
-            },
+            "summary": _summarize_quality_metrics(runs),
         }
 
     def _run_row_to_dict(self, row) -> dict:
-        stored = StoredRun(
-            run_id=row["run_id"],
-            started_at=row["started_at"],
-            finished_at=row["finished_at"],
-            status=row["status"],
-            topic=row["topic"],
-            roster=json.loads(row["roster_json"] or "{}"),
-            fingerprint_hash=row["fingerprint_hash"],
-            deep_debate=bool(row["deep_debate"]),
-            smart_phase_score=row["smart_phase_score"],
-            parse_tier=row["parse_tier"],
-            phase1_divergence=row["phase1_divergence"],
-            specificity_score=row["specificity_score"],
-            error=row["error"],
-        )
-        return asdict(stored)
+        return _run_row_to_dict(row)
 
 
 run_store = RunStore()

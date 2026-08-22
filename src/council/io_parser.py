@@ -82,6 +82,50 @@ async def _fetch_url_bytes(client: httpx.AsyncClient, url: str) -> tuple[bytes, 
     return None
 
 
+def _parse_image_attachment(filename: str, content_type: str) -> dict:
+    return {
+        "kind": "image",
+        "filename": filename or "image",
+        "content_type": content_type,
+        "summary": f"Image attachment: {filename or 'image'} ({content_type})",
+    }
+
+
+def _parse_pdf_attachment(filename: str, content_type: str, raw: bytes) -> dict:
+    doc = fitz.open(stream=raw, filetype="pdf")
+    pdf_text = "".join(page.get_text() for page in doc)
+    return {
+        "kind": "text",
+        "filename": filename or "document.pdf",
+        "content_type": content_type,
+        "text": _truncate(pdf_text.strip()),
+    }
+
+
+def _parse_json_attachment(filename: str, content_type: str, raw: bytes) -> dict:
+    decoded = raw.decode("utf-8", errors="replace")
+    try:
+        pretty = json.dumps(json.loads(decoded), indent=2)
+    except Exception:
+        pretty = decoded
+    return {
+        "kind": "text",
+        "filename": filename or "data.json",
+        "content_type": content_type,
+        "text": _truncate(pretty.strip()),
+    }
+
+
+def _parse_text_attachment(filename: str, content_type: str, raw: bytes) -> dict:
+    decoded = raw.decode("utf-8", errors="replace")
+    return {
+        "kind": "text",
+        "filename": filename or "document.txt",
+        "content_type": content_type,
+        "text": _truncate(decoded.strip()),
+    }
+
+
 def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
     normalized_name = (filename or "attachment").lower()
     normalized_type = (content_type or "application/octet-stream").lower()
@@ -89,44 +133,16 @@ def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
 
     try:
         if normalized_type.startswith("image/"):
-            return {
-                "kind": "image",
-                "filename": filename or "image",
-                "content_type": normalized_type,
-                "summary": f"Image attachment: {filename or 'image'} ({normalized_type})",
-            }
+            return _parse_image_attachment(filename, normalized_type)
 
         if normalized_name.endswith(".pdf") or normalized_type == "application/pdf":
-            doc = fitz.open(stream=raw, filetype="pdf")
-            pdf_text = "".join(page.get_text() for page in doc)
-            return {
-                "kind": "text",
-                "filename": filename or "document.pdf",
-                "content_type": normalized_type,
-                "text": _truncate(pdf_text.strip()),
-            }
+            return _parse_pdf_attachment(filename, normalized_type, raw)
 
         if normalized_name.endswith(".json") or "json" in normalized_type:
-            decoded = raw.decode("utf-8", errors="replace")
-            try:
-                pretty = json.dumps(json.loads(decoded), indent=2)
-            except Exception:
-                pretty = decoded
-            return {
-                "kind": "text",
-                "filename": filename or "data.json",
-                "content_type": normalized_type,
-                "text": _truncate(pretty.strip()),
-            }
+            return _parse_json_attachment(filename, normalized_type, raw)
 
         if normalized_name.endswith(tuple(TEXT_EXTENSIONS)) or normalized_type.startswith("text/"):
-            decoded = raw.decode("utf-8", errors="replace")
-            return {
-                "kind": "text",
-                "filename": filename or "document.txt",
-                "content_type": normalized_type,
-                "text": _truncate(decoded.strip()),
-            }
+            return _parse_text_attachment(filename, normalized_type, raw)
     except Exception as exc:
         return {
             "kind": "unsupported",
@@ -139,7 +155,7 @@ def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
         "kind": "unsupported",
         "filename": safe_name,
         "content_type": normalized_type,
-        "summary": f"Unsupported attachment kept as metadata only: {safe_name} ({normalized_type})",
+        "summary": f"Unsupported attachment format: {safe_name} ({normalized_type})",
     }
 
 

@@ -24,6 +24,38 @@ def _coerce_usage(usage: Any) -> Optional[dict]:
     return normalized or None
 
 
+def _calculate_run_totals(llm_calls: list[dict]) -> dict:
+    totals = {
+        "llm_calls": len(llm_calls),
+        "successful_calls": sum(1 for call in llm_calls if call["success"]),
+        "failed_calls": sum(1 for call in llm_calls if not call["success"]),
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    for call in llm_calls:
+        usage = call.get("usage") or {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            totals[key] += int(usage.get(key, 0) or 0)
+    return totals
+
+
+def _aggregate_model_metrics(runs: list[dict]) -> dict[str, dict[str, int]]:
+    by_model: dict[str, dict[str, int]] = {}
+    for run in runs:
+        for call in run.get("llm_calls", []):
+            model = call.get("model") or "unknown"
+            bucket = by_model.setdefault(
+                model,
+                {"calls": 0, "successes": 0, "failures": 0, "total_duration_ms": 0},
+            )
+            bucket["calls"] += 1
+            bucket["successes"] += int(call.get("success", False))
+            bucket["failures"] += int(not call.get("success", False))
+            bucket["total_duration_ms"] += int(call.get("duration_ms", 0) or 0)
+    return by_model
+
+
 class MetricsStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -114,21 +146,7 @@ class MetricsStore:
             run["duration_ms"] = int((completed_at - run["started_at"]) * 1000)
             if error:
                 run["errors"].append(error)
-
-            totals = {
-                "llm_calls": len(run["llm_calls"]),
-                "successful_calls": sum(1 for call in run["llm_calls"] if call["success"]),
-                "failed_calls": sum(1 for call in run["llm_calls"] if not call["success"]),
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
-            for call in run["llm_calls"]:
-                usage = call.get("usage") or {}
-                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                    totals[key] += int(usage.get(key, 0) or 0)
-            run["totals"] = totals
-
+            run["totals"] = _calculate_run_totals(run["llm_calls"])
             self._recent_runs.appendleft(run)
 
         self._append_to_disk(run)
@@ -157,23 +175,7 @@ class MetricsStore:
         completed = [run for run in runs if run["status"] == "completed"]
         failed = [run for run in runs if run["status"] == "failed"]
         running = [run for run in runs if run["status"] == "running"]
-
-        avg_duration_ms = 0
-        if completed:
-            avg_duration_ms = int(sum(run["duration_ms"] or 0 for run in completed) / len(completed))
-
-        by_model: dict[str, dict[str, int]] = {}
-        for run in runs:
-            for call in run.get("llm_calls", []):
-                model = call.get("model") or "unknown"
-                bucket = by_model.setdefault(
-                    model,
-                    {"calls": 0, "successes": 0, "failures": 0, "total_duration_ms": 0},
-                )
-                bucket["calls"] += 1
-                bucket["successes"] += int(call.get("success", False))
-                bucket["failures"] += int(not call.get("success", False))
-                bucket["total_duration_ms"] += int(call.get("duration_ms", 0) or 0)
+        avg_duration_ms = int(sum(run["duration_ms"] or 0 for run in completed) / len(completed)) if completed else 0
 
         return {
             "runs_seen": len(runs),
@@ -181,7 +183,7 @@ class MetricsStore:
             "failed_runs": len(failed),
             "running_runs": len(running),
             "avg_completed_duration_ms": avg_duration_ms,
-            "by_model": by_model,
+            "by_model": _aggregate_model_metrics(runs),
         }
 
 
