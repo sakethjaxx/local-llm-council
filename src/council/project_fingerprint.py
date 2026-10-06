@@ -4,7 +4,13 @@ import os
 from collections import Counter
 from pathlib import Path
 
-SKIP_DIRS = {".git", "venv", "node_modules", "__pycache__", "dist", "build"}
+SKIP_DIRS = {
+    ".git", "venv", ".venv", "env", "node_modules", "__pycache__", "dist", "build",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages", "target", "vendor",
+}
+# fingerprint() runs on every council run against the server's working
+# directory; a cap keeps that cheap even if it was started from $HOME.
+MAX_FILES_SCANNED = 5000
 LANGUAGE_EXTENSIONS = {
     ".py": "python", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
     ".ts": "typescript", ".tsx": "typescript", ".go": "go", ".rs": "rust",
@@ -39,12 +45,16 @@ def _read_text(path: Path, limit: int | None = None) -> str:
 
 def _detect_languages(root: Path) -> list[str]:
     counts = Counter()
+    scanned = 0
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
         for f in files:
             ext = os.path.splitext(f)[1].lower()
             if lang := LANGUAGE_EXTENSIONS.get(ext):
                 counts[lang] += 1
+        scanned += len(files)
+        if scanned >= MAX_FILES_SCANNED:
+            break
     return [lang for lang, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]]
 
 

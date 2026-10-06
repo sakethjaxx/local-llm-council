@@ -14,7 +14,6 @@ from contextlib import asynccontextmanager
 from typing import List, Literal, Optional
 
 import httpx
-from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -55,7 +54,7 @@ from main_routes_helper import (
 )
 from memory_store import memory_store
 from metrics_store import metrics_store
-from ollama_manager import auto_pull_enabled, ensure_models_for_config, pull_model_stream
+from ollama_manager import auto_pull_enabled, ensure_models_for_config, ollama_base_url, pull_model_stream
 from orchestrator import CouncilOrchestrator
 from project_graph import get_project_code_graph
 from provider_caps import MODELS as PROVIDER_MODELS, redact_config
@@ -79,7 +78,6 @@ from shutdown_state import (
 )
 from skill_registry import skill_registry
 
-load_dotenv()
 logger = get_logger(__name__)
 APP_DIR = pathlib.Path(__file__).resolve().parent
 
@@ -140,10 +138,11 @@ async def lifespan(app: FastAPI):
         t.add_done_callback(_consume_background_task)
     yield
     request_shutdown()
-    try:
-        await asyncio.wait_for(wait_for_active_streams(), timeout=15.0)
-    except asyncio.TimeoutError:
-        logger.warning("shutdown_timed_out", extra={"active_streams": active_stream_count()})
+    # wait_for_active_streams() polls with time.sleep, so it must run off the loop
+    # or the streams it is waiting for could never make progress.
+    remaining = await asyncio.to_thread(wait_for_active_streams, 15.0, 0.1)
+    if remaining:
+        logger.warning("shutdown_timed_out", extra={"active_streams": remaining})
 
 
 app = FastAPI(title="Local LLM Council", lifespan=lifespan, dependencies=[Depends(verify_api_key)])
@@ -428,7 +427,7 @@ async def health():
 async def _ollama_ok() -> bool:
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get("http://localhost:11434/api/tags")
+            r = await client.get(f"{ollama_base_url()}/api/tags")
             return r.status_code == 200
     except Exception:
         return False

@@ -149,5 +149,50 @@ class CLITests(unittest.TestCase):
             Path(temp_path).unlink(missing_ok=True)
 
 
+    def _run_with_signature_check(self, argv):
+        """Run the CLI against a fake run() that must bind to the real signature."""
+        import inspect
+        from orchestrator import CouncilOrchestrator
+
+        real_sig = inspect.signature(CouncilOrchestrator.run)
+        seen = {}
+
+        async def checked_run(orch_self, *args, **kwargs):
+            seen["args"] = real_sig.bind(orch_self, *args, **kwargs).arguments  # TypeError on drift
+            yield {"type": "member_thinking", "member": "architect", "meta": {"label": "Lead Architect"}}
+            yield {"type": "member_done", "member": "architect", "full_text": "analysis"}
+            yield {"type": "member_done", "member": "chairman", "full_text": '{"verdict": "APPROVE", "risk_score": 1, "action_items": ["Ship it"]}'}
+
+        with patch("cli.sys.argv", argv), patch.object(CouncilOrchestrator, "run", checked_run), \
+                patch("cli.sys.exit") as mock_exit:
+            asyncio.run(cli.main())
+        mock_exit.assert_called_once_with(0)
+        return seen["args"]
+
+    def test_cli_ask_matches_real_orchestrator_signature(self):
+        args = self._run_with_signature_check(["cli.py", "ask", "Is WAL safe?", "--fast-mode", "--deep-debate"])
+        self.assertEqual(args["token_budget_profile"], "economy")
+        self.assertTrue(args["deep_debate"])
+
+    def test_cli_review_directory_attaches_source_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "app.py").write_text("import util\n\ndef main():\n    return util.VALUE\n", encoding="utf-8")
+            Path(root, "util.py").write_text("VALUE = 1\n", encoding="utf-8")
+            args = self._run_with_signature_check(["cli.py", "review", root])
+        filenames = sorted(a["filename"] for a in args["attachments"])
+        self.assertEqual(filenames, ["app.py", "util.py"])
+
+    @patch("cli.sys.argv", ["cli.py", "ask", "Unparseable?", "--json"])
+    @patch("cli.CouncilOrchestrator")
+    def test_cli_ask_exits_nonzero_when_verdict_unparseable(self, mock_orch_class):
+        async def mock_run_generator(*args, **kwargs):
+            yield {"type": "member_done", "member": "chairman", "full_text": "[Error connecting to Chairman]"}
+
+        mock_orch_class.return_value.run = mock_run_generator
+        with patch("cli.sys.exit") as mock_exit:
+            asyncio.run(cli.main())
+        mock_exit.assert_called_once_with(1)
+
+
 if __name__ == "__main__":
     unittest.main()

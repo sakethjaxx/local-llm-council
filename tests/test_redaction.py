@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -33,7 +34,7 @@ class RedactionTests(unittest.TestCase):
             )
             store.record_phase_output("secret-run", 1, "architect", "found AKIAIOSFODNN7EXAMPLE in code")
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 topic = conn.execute("SELECT topic FROM runs WHERE run_id = ?", ("secret-run",)).fetchone()[0]
                 output = conn.execute(
                     "SELECT output FROM phase_outputs WHERE run_id = ? AND phase = 1", ("secret-run",)
@@ -97,7 +98,7 @@ class RedactionTests(unittest.TestCase):
                 deep_debate=False,
             )
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 raw = conn.execute("SELECT roster_json FROM runs WHERE run_id = ?", ("redacted-run",)).fetchone()[0]
             roster = json.loads(raw)
 

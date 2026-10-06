@@ -1,3 +1,4 @@
+from contextlib import closing
 import os
 import sqlite3
 import tempfile
@@ -93,7 +94,7 @@ class RunStoreTests(unittest.TestCase):
 
     def test_migrations_upgrade_a_legacy_database_idempotently(self):
         legacy_path = os.path.join(self.temp_dir.name, "legacy.db")
-        with sqlite3.connect(legacy_path) as conn:
+        with closing(sqlite3.connect(legacy_path)) as conn, conn:
             conn.executescript(
                 """
                 CREATE TABLE runs (
@@ -123,7 +124,7 @@ class RunStoreTests(unittest.TestCase):
         RunStore(legacy_path)
         RunStore(legacy_path)  # A second boot must not reapply migrations.
 
-        with sqlite3.connect(legacy_path) as conn:
+        with closing(sqlite3.connect(legacy_path)) as conn, conn:
             run_columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
             phase_columns = {row[1] for row in conn.execute("PRAGMA table_info(phase_outputs)")}
             versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]

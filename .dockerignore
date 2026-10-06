@@ -1,10 +1,16 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 council_runs.db*
 council_metrics.jsonl
+data/
+dist/
+build/
+*.egg-info/
 .env
 .git
 tests/
 .pytest_cache/
+.pytest-tmp/

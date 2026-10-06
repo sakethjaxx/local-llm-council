@@ -62,5 +62,24 @@ class PullModelStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1], {"type": "done", "success": False, "returncode": 127})
 
 
+class InstalledModelsTests(unittest.TestCase):
+    def test_reads_tags_from_daemon_http_api(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen2.5:7b"}, {"name": "llama3.2:latest"}]}
+
+        with patch.dict("os.environ", {"OLLAMA_API_BASE": "http://ollama-host:11434/"}), \
+                patch("ollama_manager.httpx.get", return_value=FakeResponse()) as fake_get:
+            self.assertEqual(ollama_manager.get_installed_models(), ["qwen2.5:7b", "llama3.2:latest"])
+        fake_get.assert_called_once_with("http://ollama-host:11434/api/tags", timeout=5.0)
+
+    def test_unreachable_daemon_means_no_models(self):
+        with patch("ollama_manager.httpx.get", side_effect=OSError("connection refused")):
+            self.assertEqual(ollama_manager.get_installed_models(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

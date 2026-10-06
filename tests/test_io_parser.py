@@ -92,6 +92,19 @@ class IOParserTests(unittest.TestCase):
             self.assertIn("app.py", names)
             self.assertNotIn("hunter2", prompt)
 
+    def test_ingest_folder_skips_binaries_and_named_env_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "app.py").write_text("print('hi')", encoding="utf-8")
+            (root / "Dockerfile").write_text("FROM python:3.13-slim", encoding="utf-8")
+            (root / "prod.env").write_text("DB_PASSWORD=hunter2", encoding="utf-8")
+            (root / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+            (root / "runs.db").write_bytes(b"SQLite format 3\x00" + b"\x00" * 64)
+
+            names = sorted(a["filename"] for a in ingest_folder(str(root)))
+
+            self.assertEqual(names, ["Dockerfile", "app.py"])
+
     def test_is_safe_url(self):
         self.assertFalse(_is_safe_url("ftp://example.com"))
         self.assertFalse(_is_safe_url("http://localhost:8000"))

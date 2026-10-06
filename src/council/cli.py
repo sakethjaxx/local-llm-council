@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -16,21 +17,79 @@ from run_store import RunStore
 logger = get_logger(__name__)
 
 
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("local-llm-council")
+    except Exception:
+        return "dev"
+
+
+def _quiet_logs() -> None:
+    """Keep stdout for results: send logs to stderr, WARNING+ unless COUNCIL_LOG_LEVEL is set."""
+    for stream in (sys.stdout, sys.stderr):
+        # Model output can hold any Unicode; never crash on a legacy console codepage.
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    root = logging.getLogger()
+    if "COUNCIL_LOG_LEVEL" not in os.environ:
+        root.setLevel(logging.WARNING)
+    for handler in root.handlers:
+        if isinstance(handler, logging.StreamHandler):
+            handler.setStream(sys.stderr)
+
+
+def _status(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+async def _collect_verdict(events) -> dict:
+    """Report phase/member progress on stderr and return the parsed chairman verdict.
+
+    Members run in parallel, so their token streams are not echoed: interleaved
+    they would be unreadable.
+    """
+    labels = {"chairman": "Chairman"}
+    chairman_output = ""
+    async for event in events:
+        kind = event.get("type")
+        member = event.get("member")
+        if kind == "phase_start":
+            _status(f"\n== {event.get('label', 'Phase')} ==")
+        elif kind == "member_thinking":
+            labels[member] = (event.get("meta") or {}).get("label") or member
+        elif kind == "member_done":
+            if member == "chairman":
+                chairman_output = event.get("full_text", "")
+            _status(f"  {labels.get(member, member)}: {'failed' if event.get('errored') else 'done'}")
+        elif kind in ("warning", "error"):
+            _status(f"[{kind}] {event.get('message', '')}")
+    return parse_chairman_response(chairman_output)
+
+
+def _print_verdict(data: dict) -> None:
+    print(f"\nVerdict: {data.get('verdict')}")
+    print(f"Risk score: {data.get('risk_score')}/10 | Confidence: {data.get('confidence')}/10")
+    for title, key in (("Action items", "action_items"), ("Consensus", "consensus"), ("Disputes", "disputes")):
+        items = data.get(key) or []
+        if items:
+            print(f"\n{title}:")
+            for item in items:
+                print(f"  - {item}")
+
+
 async def _run_check_diff():
-    logger.info("precommit_hook_started")
     result = subprocess.run(["git", "diff", "--cached"], capture_output=True, text=True)
     diff = result.stdout
     if not diff.strip():
-        logger.info("no_staged_changes")
+        _status("council: no staged changes to review.")
         sys.exit(0)
+        return
 
-    logger.info("precommit_review_started")
-
-    # 1. Fetch changed files
     files_result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
     changed_files = [f.strip() for f in files_result.stdout.split('\n') if f.strip()]
+    _status(f"council: reviewing {len(changed_files)} staged file(s)...")
 
-    # 2. Get Blast Radius
     blast_radius = calculate_blast_radius(changed_files)
     full_topic = blast_radius + "\n\n--- GIT DIFF ---\n" + diff
     hardware_config = get_hardware_suggestion()["config"]
@@ -39,87 +98,70 @@ async def _run_check_diff():
         "chairman": hardware_config.get("chairman", {}),
     }
 
-    orchestrator = CouncilOrchestrator()
-    chairman_output = ""
-
-    async for event in orchestrator.run(
+    data = await _collect_verdict(CouncilOrchestrator().run(
         topic_text=full_topic,
         attachments=None,
         custom_config=config,
-        deep_debate=False
-    ):
-        if event.get("type") == "member_done" and event.get("member") == "chairman":
-            chairman_output = event.get("full_text", "")
-        elif event.get("type") == "member_token":
-            sys.stdout.write(event.get("chunk", ""))
-            sys.stdout.flush()
-        elif event.get("type") == "token":
-            sys.stdout.write(event.get("text", ""))
-            sys.stdout.flush()
-        elif event.get("type") == "phase_start":
-            logger.info("phase_started", extra={"label": event.get("label")})
-
-    logger.info("chairman_verdict_parse_started")
-    data = parse_chairman_response(chairman_output)
+        deep_debate=False,
+    ))
+    _print_verdict(data)
     score = data.get("risk_score", 0)
     verdict = str(data.get("verdict", "")).upper()
 
     if "REJECT" in verdict or "BLOCK" in verdict or (isinstance(score, (int, float)) and score >= 8):
-        logger.error("commit_blocked", extra={"risk_score": score, "action_items": data.get("action_items", [])})
+        _status("council: commit blocked. Fix the items above, or bypass with `git commit --no-verify`.")
         sys.exit(1)
     else:
-        logger.info("commit_approved", extra={"risk_score": score})
         sys.exit(0)
 
 
-async def _run_ask(topic: str, deep_debate: bool = False, fast_mode: bool = False, output_json: bool = False):
-    logger.info("cli_ask_started", extra={"topic": topic, "deep_debate": deep_debate})
-    orchestrator = CouncilOrchestrator()
-    chairman_output = ""
-
-    async for event in orchestrator.run(
+async def _run_ask(
+    topic: str,
+    deep_debate: bool = False,
+    fast_mode: bool = False,
+    output_json: bool = False,
+    attachments: list[dict] | None = None,
+):
+    data = await _collect_verdict(CouncilOrchestrator().run(
         topic_text=topic,
+        attachments=attachments,
         deep_debate=deep_debate,
-        fast_mode=fast_mode,
-    ):
-        if event.get("type") == "member_done" and event.get("member") == "chairman":
-            chairman_output = event.get("full_text", "")
-        elif not output_json:
-            if event.get("type") == "member_token":
-                sys.stdout.write(event.get("chunk", ""))
-                sys.stdout.flush()
-            elif event.get("type") == "token":
-                sys.stdout.write(event.get("text", ""))
-                sys.stdout.flush()
-            elif event.get("type") == "phase_start":
-                print(f"\n--- {event.get('label', 'Phase')} ---")
-
+        token_budget_profile="economy" if fast_mode else None,
+    ))
     if output_json:
-        data = parse_chairman_response(chairman_output)
         print(json.dumps(data, indent=2))
     else:
-        print("\n")
-    sys.exit(0)
+        _print_verdict(data)
+    sys.exit(1 if data.get("_parse_tier") == "parse_failed" else 0)
 
 
-async def _run_review(path: str, deep_debate: bool = False):
+async def _run_review(path: str, deep_debate: bool = False, output_json: bool = False):
     target = Path(path).resolve()
     if not target.exists():
         print(f"Error: Path '{path}' does not exist.", file=sys.stderr)
         sys.exit(1)
+        return
 
+    attachments = None
     if target.is_file():
         try:
             content = target.read_text(encoding="utf-8")
         except Exception as e:
             print(f"Error reading file '{path}': {e}", file=sys.stderr)
             sys.exit(1)
+            return
         topic = f"Review file `{target.name}`:\n\n```\n{content[:8000]}\n```"
     else:
-        code_graph = get_project_code_graph(target)
-        topic = f"Architectural review of project directory `{target.name}`.\n\n{code_graph.get('summary', '')}"
+        # Same file selection as the web UI's "Review Local Project".
+        from main_routes_helper import DEFAULT_REVIEW_FILE_BUDGET, _pick_top_files, _read_files_as_attachments
 
-    await _run_ask(topic, deep_debate=deep_debate)
+        code_graph = get_project_code_graph(target)
+        top_files = _pick_top_files(code_graph, DEFAULT_REVIEW_FILE_BUDGET)
+        attachments = _read_files_as_attachments(str(target), top_files)
+        _status(f"council: reviewing {len(attachments)} of {code_graph['stats']['files']} files in {target.name}")
+        topic = code_graph.get("review_input") or f"Architectural review of project directory `{target.name}`."
+
+    await _run_ask(topic, deep_debate=deep_debate, output_json=output_json, attachments=attachments)
 
 
 def _show_history(limit: int = 10):
@@ -128,6 +170,7 @@ def _show_history(limit: int = 10):
     if not runs:
         print("No council runs found in history.")
         sys.exit(0)
+        return
 
     print(f"\n{'RUN ID':<18} {'STATUS':<12} {'TOPIC':<40}")
     print("-" * 72)
@@ -142,14 +185,18 @@ def _show_history(limit: int = 10):
 
 def _show_models():
     hw = get_hardware_suggestion()
-    preset = hw.get("preset", "balanced")
-    total_ram = hw.get("total_ram_gb", "unknown")
-    vram = hw.get("vram_gb", "unknown")
-    print(f"\nDetected Hardware: {total_ram} GB RAM, {vram} GB VRAM")
-    print(f"Recommended Preset: {preset}")
-    print("\nConfigured Roster:")
+    print(f"\nDetected hardware: {hw.get('ram_gb', '?')} GB RAM (model memory budget ~{hw.get('budget_gb', '?')} GB)")
+    print(f"Roster strategy: {hw.get('strategy', 'shared')}")
+    if hw.get("reason"):
+        print(f"  {hw['reason']}")
+    print("\nSuggested roster:")
     for role, cfg in hw.get("config", {}).items():
-        print(f"  - {role:<12}: {cfg.get('model', 'default')} ({cfg.get('persona', '')})")
+        print(f"  - {cfg.get('label', role):<18} {cfg.get('model', 'default')}")
+    pulls = hw.get("recommended_pull") or []
+    if pulls:
+        print("\nPull the missing models with:")
+        for cmd in pulls:
+            print(f"  {cmd}")
     print()
     sys.exit(0)
 
@@ -157,24 +204,26 @@ def _show_models():
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="council",
-        description="🏛️ Local LLM Council: Hardware-aware, multi-agent review & decision engine"
+        description="Local LLM Council: hardware-aware, multi-model review & decision engine"
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # check_diff
-    subparsers.add_parser("check_diff", help="Run pre-commit hook on staged git changes")
+    subparsers.add_parser("check_diff", help="Review staged git changes (exit 1 blocks the commit)")
 
     # ask
     ask_p = subparsers.add_parser("ask", help="Ask a question or request council deliberation")
     ask_p.add_argument("topic", type=str, help="Question or topic for the council")
-    ask_p.add_argument("--deep-debate", action="store_true", help="Enable multi-round debate")
-    ask_p.add_argument("--fast-mode", action="store_true", help="Fast single-pass consensus")
+    ask_p.add_argument("--deep-debate", action="store_true", help="Enable the Phase 2 peer cross-review")
+    ask_p.add_argument("--fast-mode", action="store_true", help="Use the economy token budget for shorter, faster answers")
     ask_p.add_argument("--json", action="store_true", help="Output chairman verdict as JSON")
 
     # review
     rev_p = subparsers.add_parser("review", help="Review a file or project directory")
     rev_p.add_argument("path", type=str, help="Path to file or directory")
-    rev_p.add_argument("--deep-debate", action="store_true", help="Enable deep debate")
+    rev_p.add_argument("--deep-debate", action="store_true", help="Enable the Phase 2 peer cross-review")
+    rev_p.add_argument("--json", action="store_true", help="Output chairman verdict as JSON")
 
     # history
     hist_p = subparsers.add_parser("history", help="List recent council runs")
@@ -188,8 +237,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def main():
     parser = build_parser()
-
-    # Handle backward-compatible check_diff if invoked directly without subparser parsing
     args = parser.parse_args(sys.argv[1:] if len(sys.argv) > 1 else ["--help"])
 
     if args.command == "check_diff":
@@ -197,7 +244,7 @@ async def main():
     elif args.command == "ask":
         await _run_ask(args.topic, deep_debate=args.deep_debate, fast_mode=args.fast_mode, output_json=args.json)
     elif args.command == "review":
-        await _run_review(args.path, deep_debate=args.deep_debate)
+        await _run_review(args.path, deep_debate=args.deep_debate, output_json=args.json)
     elif args.command == "history":
         _show_history(limit=args.limit)
     elif args.command == "models":
@@ -207,5 +254,11 @@ async def main():
         sys.exit(0)
 
 
-if __name__ == "__main__":
+def entrypoint():
+    """Sync wrapper for the `council` console script (entry points cannot await)."""
+    _quiet_logs()
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    entrypoint()

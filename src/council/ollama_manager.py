@@ -3,6 +3,8 @@ import os
 import subprocess
 from typing import AsyncIterator, Iterable
 
+import httpx
+
 from hardware_detect import get_hardware_suggestion
 from provider_caps import caps_for
 
@@ -36,30 +38,23 @@ def _iter_ollama_models(config: dict) -> Iterable[str]:
                 yield tag
 
 
+def ollama_base_url() -> str:
+    """Ollama daemon URL; OLLAMA_API_BASE is the variable LiteLLM itself reads."""
+    return (os.getenv("OLLAMA_API_BASE") or "http://localhost:11434").rstrip("/")
+
+
 def get_installed_models() -> list[str]:
+    """Tags the Ollama daemon can serve, or [] when it is unreachable.
+
+    Asks the HTTP API rather than `ollama list` so detection also works when the
+    CLI is not on PATH, e.g. this app in Docker talking to Ollama on the host.
+    """
     try:
-        result = subprocess.run(
-            ["ollama", "list"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        )
-    except FileNotFoundError:
-        return []
+        resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=5.0)
+        resp.raise_for_status()
+        return [m["name"] for m in resp.json().get("models", []) if m.get("name")]
     except Exception:
         return []
-
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if not lines:
-        return []
-
-    models = []
-    for line in lines[1:]:
-        parts = line.split()
-        if parts:
-            models.append(parts[0])
-    return models
 
 
 def get_required_models(config: dict | None = None) -> list[str]:

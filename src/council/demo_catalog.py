@@ -4,7 +4,7 @@ import os
 
 def load_presets():
     path = os.path.join(os.path.dirname(__file__), "presets.json")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

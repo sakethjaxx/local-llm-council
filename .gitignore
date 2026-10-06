@@ -3,6 +3,12 @@ __pycache__/
 *.pyc
 .DS_Store
 venv/
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.pytest-tmp/
 data/*
 !data/.gitkeep
 council_metrics.jsonl

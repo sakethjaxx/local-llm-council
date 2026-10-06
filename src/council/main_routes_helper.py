@@ -12,12 +12,13 @@ from typing import List, Optional
 from fastapi import HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
+from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES
 from cloud_keys import extract_cloud_keys
 from hardware_detect import get_default_council_config
 from io_parser import format_attachments_for_prompt, ingest_folder, parse_uploaded_file
 from logging_utils import get_logger
 from metrics_store import metrics_store
-from ollama_manager import ensure_models_for_config
+from ollama_manager import auto_pull_enabled, ensure_models_for_config
 from project_graph import get_project_code_graph
 from provider_caps import redact_config, supports_image_input
 from routes_stream import (
@@ -58,19 +59,21 @@ def _main_attr(name: str, default):
 
 
 def _allowed_origins() -> list[str]:
-    raw = os.getenv("COUNCIL_CORS_ORIGINS", "")
-    if not raw.strip():
+    # Default to the local UI only: a wildcard would let any website the user
+    # visits read local files through /ingest/folder. `*` stays an explicit opt-in.
+    configured = os.getenv("COUNCIL_CORS_ORIGINS", "").strip()
+    if not configured:
+        port = os.getenv("COUNCIL_PORT", "8765").strip() or "8765"
+        return [f"http://localhost:{port}", f"http://127.0.0.1:{port}"]
+    if configured == "*":
         return ["*"]
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
 def _int_env(name: str, default: int) -> int:
-    val = os.getenv(name)
-    if val is None:
-        return default
     try:
-        return int(val.strip())
-    except ValueError:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
         return default
 
 
@@ -94,17 +97,22 @@ def _shutdown_event_payload() -> dict:
 
 def _feature_flags() -> dict:
     return {
-        "auto_pull": os.getenv("COUNCIL_AUTO_PULL", "true").lower() == "true",
-        "search": os.getenv("COUNCIL_ENABLE_SEARCH", "false").lower() == "true",
-        "dynamic_swarm": os.getenv("COUNCIL_ENABLE_DYNAMIC_SWARM", "false").lower() == "true",
-        "python_tool": os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() == "true",
         "python_tool_enabled": os.getenv("COUNCIL_ENABLE_PYTHON_TOOL", "false").lower() == "true",
+        "web_search_enabled": os.getenv("COUNCIL_ENABLE_WEB_SEARCH", "false").lower() == "true",
+        "metrics_file": os.getenv("COUNCIL_METRICS_FILE", "data/council_metrics.jsonl"),
+        "cors_origins": _allowed_origins(),
+        "default_provider": "ollama",
+        "default_mode": "free-local-open-weights",
+        "auto_pull_local_models": auto_pull_enabled(),
+        "token_budget_profiles": list(TOKEN_BUDGET_PROFILES.keys()),
+        "default_token_budget_profile": DEFAULT_TOKEN_BUDGET_PROFILE,
     }
 
 
 def _confine_to_project_root(candidate: str) -> str:
     resolved = os.path.realpath(candidate)
     for blocked in _BLOCKED_PATH_PREFIXES:
+        blocked = os.path.realpath(blocked)  # same normalization as the candidate (drive letters on Windows)
         if blocked and (resolved == blocked or resolved.startswith(blocked + os.sep)):
             raise HTTPException(status_code=403, detail=f"Access to sensitive directory is forbidden: {blocked}")
 

@@ -240,6 +240,7 @@ def _is_secret_file(fname: str) -> bool:
     return (
         low in SKIP_INGEST_FILES
         or low.startswith(".env.")
+        or low.endswith(".env")
         or low.endswith(SKIP_INGEST_SUFFIXES)
     )
 
@@ -264,10 +265,14 @@ def ingest_folder(folder_path: str, max_files: int = 50) -> list[dict]:
                 continue
             full_path = os.path.join(dirpath, fname)
             rel_name = os.path.relpath(full_path, root)
+            ext = os.path.splitext(fname)[1].lower()
             try:
+                if os.path.getsize(full_path) > MAX_FETCH_BYTES:
+                    continue
                 with open(full_path, "rb") as f:
                     raw = f.read()
-                ext = os.path.splitext(fname)[1].lower()
+                if ext != ".pdf" and b"\x00" in raw[:8192]:
+                    continue  # binary (image, archive, database): noise in a prompt
                 ctype = "application/json" if ext == ".json" else ("application/pdf" if ext == ".pdf" else "text/plain")
                 parsed = parse_uploaded_file(rel_name, ctype, raw)
                 if parsed.get("kind") != "unsupported":

@@ -109,7 +109,7 @@ async def main():
     
     # 1. Test Architecture Brief (Fast Triage / Consensus)
     arch_file = samples_dir / "architecture_brief.md"
-    arch_text = arch_file.read_text() if arch_file.exists() else "Review system architecture."
+    arch_text = arch_file.read_text(encoding="utf-8") if arch_file.exists() else "Review system architecture."
     
     # Attachments parsed representation
     attachments = [{

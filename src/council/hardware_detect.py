@@ -84,7 +84,7 @@ _EFF = 1.4
 _STRONG_GB = 4.0
 
 # Cache the installed-model probe — get_default_council_config() is called on
-# many code paths, and each probe shells out to `ollama list`.
+# many code paths, and each probe is an HTTP round trip to the Ollama daemon.
 _installed_cache: tuple[float, list[str]] | None = None
 _INSTALLED_TTL = 60.0
 

@@ -162,6 +162,19 @@
   font-size: 12px;
 }
 
+.replay-detail-meta {
+  margin-top: 6px;
+}
+
+.replay-actions {
+  margin-top: 8px;
+}
+
+.replay-output {
+  display: block;
+  margin-top: 8px;
+}
+
 .theme-switch {
   position: relative;
   display: inline-flex;

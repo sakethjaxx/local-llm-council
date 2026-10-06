@@ -14,7 +14,7 @@ class ApiBoundaryTests(unittest.TestCase):
                 "COUNCIL_PROJECT_ROOT": root,
                 "COUNCIL_API_KEY": "test-key",
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-                "PYTHONPATH": os.path.join(os.path.dirname(__file__), "..", "src"),
+                "PYTHONPATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")),
             }
             script = f"""
 from fastapi.testclient import TestClient
@@ -30,11 +30,20 @@ assert blocked.status_code == 403, blocked.text
 cors = client.options('/health', headers={{
     'Origin': 'https://untrusted.example', 'Access-Control-Request-Method': 'GET',
 }})
-assert cors.headers.get('access-control-allow-origin') != 'https://untrusted.example'
+assert cors.headers.get('access-control-allow-origin') not in ('*', 'https://untrusted.example'), cors.headers
+local = client.options('/health', headers={{
+    'Origin': 'http://localhost:8765', 'Access-Control-Request-Method': 'GET',
+}})
+assert local.headers.get('access-control-allow-origin') == 'http://localhost:8765', local.headers
+# Entering/exiting the client runs the lifespan; shutdown used to raise TypeError.
+with TestClient(main.app) as lifespan_client:
+    assert lifespan_client.get('/health', headers={{'X-API-Key': 'test-key'}}).status_code == 200
 """
+            # cwd=root keeps a developer's .env out of this fresh interpreter.
             result = subprocess.run(
                 [sys.executable, "-c", script],
                 env=env,
+                cwd=root,
                 capture_output=True,
                 text=True,
             )
