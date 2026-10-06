@@ -1,6 +1,8 @@
 let projectScanTimer = null;
 let modelCatalog = null;
 let allLoadedReplays = [];
+let projectScanGeneration = 0;
+let preflightGeneration = 0;
 
 const CLOUD_MODEL_CHOICES = [
   { model_id: 'openai/gpt-4o-mini', label: 'gpt-4o-mini (OpenAI key)' },
@@ -22,6 +24,7 @@ function scheduleProjectScan() {
 }
 
 async function previewProjectScan() {
+  const generation = ++projectScanGeneration;
   const path = document.getElementById('projectPathInput')?.value.trim();
   const infoDiv = document.getElementById('projectScanInfo');
   const preview = document.getElementById('projectFilePreview');
@@ -33,7 +36,8 @@ async function previewProjectScan() {
 
   if (infoDiv) infoDiv.textContent = 'Scanning...';
   try {
-    const resp = await fetch(`/project/code-graph?path=${encodeURIComponent(path)}`);
+    const resp = await councilFetch(`/project/code-graph?path=${encodeURIComponent(path)}`);
+    if (generation !== projectScanGeneration) return;
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       if (infoDiv) infoDiv.textContent = err.detail || `Cannot scan path (HTTP ${resp.status}).`;
@@ -41,6 +45,7 @@ async function previewProjectScan() {
       return;
     }
     const data = await resp.json();
+    if (generation !== projectScanGeneration) return;
     const total = data.stats?.files || 0;
     if (!total) {
       if (infoDiv) infoDiv.textContent = 'No supported source files found at this path.';
@@ -55,6 +60,7 @@ async function previewProjectScan() {
       preview.innerHTML = names.map(n => `<span class="file-chip">${escapeHtml(n)}</span>`).join('');
     }
   } catch (e) {
+    if (generation !== projectScanGeneration) return;
     if (infoDiv) infoDiv.textContent = 'Scan failed. Is the backend running?';
   }
 }
@@ -68,7 +74,7 @@ async function bulkIngestFolder() {
   if (infoDiv) infoDiv.textContent = `Bulk ingesting up to ${budget} files...`;
   
   try {
-    const resp = await fetch('/ingest/folder', {
+    const resp = await councilFetch('/ingest/folder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder_path: path, max_files: budget })
@@ -120,7 +126,7 @@ async function bulkIngestFolder() {
 
 async function fetchDemoCatalog() {
   try {
-    const resp = await fetch('/config/presets');
+    const resp = await councilFetch('/config/presets');
     demoCatalog = await resp.json();
     renderPresets();
     renderSampleActions();
@@ -149,7 +155,7 @@ async function attachSample(sampleId) {
   const sample = (demoCatalog.samples || []).find(item => item.id === sampleId);
   if (!sample) return;
 
-  const resp = await fetch(`/demo-samples/${sample.filename}`);
+  const resp = await councilFetch(`/demo-samples/${sample.filename}`);
   const blob = await resp.blob();
   const file = new File([blob], sample.filename, { type: sample.content_type || blob.type || 'text/plain' });
   selectedFiles = [...selectedFiles, file];
@@ -222,11 +228,13 @@ async function onPresetSelected(presetId) {
 }
 
 async function refreshPreflight() {
+  const generation = ++preflightGeneration;
+  preflightState = null;
   const box = document.getElementById('preflightBox');
   if (!box) return;
   box.innerHTML = '<div class="status-line">Running preflight checks...</div>';
   try {
-    const resp = await fetch('/ollama/check', {
+    const resp = await councilFetch('/ollama/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -234,7 +242,10 @@ async function refreshPreflight() {
         attachment_names: selectedFiles.map(file => file.name)
       })
     });
-    preflightState = await resp.json();
+    if (!resp.ok) throw new Error(resp.status === 403 ? 'Server authentication required.' : `Preflight failed (HTTP ${resp.status}).`);
+    const result = await resp.json();
+    if (generation !== preflightGeneration) return;
+    preflightState = result;
     const statusClass = preflightState.ready ? 'status-good' : 'status-bad';
     const warnings = preflightState.warnings || [];
     const warningHtml = warnings.map(item => `<div class="status-line status-warn">${escapeHtml(item)}</div>`).join('');
@@ -248,14 +259,16 @@ async function refreshPreflight() {
       ${warningHtml || '<div class="status-line">No demo warnings for current setup.</div>'}
     `;
   } catch (e) {
-    box.innerHTML = '<div class="status-line status-bad">Preflight failed. Backend check offline.</div>';
+    if (generation !== preflightGeneration) return;
+    preflightState = null;
+    box.innerHTML = `<div class="status-line status-bad">${escapeHtml(e.message || 'Preflight failed. Backend check offline.')}</div>`;
   }
 }
 
 async function loadModelCatalog(force = false) {
   if (modelCatalog && !force) return modelCatalog;
   try {
-    const resp = await fetch('/models/catalog');
+    const resp = await councilFetch('/models/catalog');
     if (!resp.ok) return null;
     modelCatalog = await resp.json();
   } catch (e) {
@@ -365,7 +378,7 @@ function updateRosterStrategySummary(data) {
 
 async function loadHardwareDefaults() {
   try {
-    const resp = await fetch('/hardware/suggest?strategy=auto');
+    const resp = await councilFetch('/hardware/suggest?strategy=auto');
     const data = await resp.json();
     if (data && data.config) {
       hardwareConfig = data.config;
@@ -383,7 +396,7 @@ async function loadHardwareDefaults() {
 
 async function autoConfigureHardware(silent = false) {
   try {
-    const resp = await fetch(`/hardware/suggest?strategy=${encodeURIComponent(rosterStrategy())}`);
+    const resp = await councilFetch(`/hardware/suggest?strategy=${encodeURIComponent(rosterStrategy())}`);
     const data = await resp.json();
     if (!resp.ok) throw new Error('Hardware suggestion failed');
     if (!silent) {
@@ -413,7 +426,7 @@ async function enableQualityMode() {
 
 async function exportMemoryGraph() {
   try {
-    const resp = await fetch('/memory-graph/export');
+    const resp = await councilFetch('/memory-graph/export');
     if (!resp.ok) return showToast('Failed to export knowledge graph.');
     const data = await resp.json();
     const jsonStr = JSON.stringify(data, null, 2);

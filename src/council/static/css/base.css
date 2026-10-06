@@ -235,6 +235,7 @@ main {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 textarea,
@@ -296,13 +297,15 @@ select {
   line-height: 1;
   padding: 8px 12px;
   cursor: pointer;
-  border-radius: 999px;
+  border-radius: 6px;
   transition: transform 110ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   min-height: 30px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .btn:hover {

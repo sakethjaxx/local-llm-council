@@ -5,6 +5,7 @@ function initApp() {
   initPressFeedback();
   initDragAndDrop();
   initKeyboardShortcuts();
+  initDialogs();
   renderSeats();
   hydrateCloudKeys();
   setTokenBudgetProfile('balanced');
@@ -16,7 +17,10 @@ function initApp() {
     const incoming = Array.from(event.target.files || []);
     const existingNames = new Set(selectedFiles.map(f => f.name));
     for (const f of incoming) {
-      if (!existingNames.has(f.name)) selectedFiles.push(f);
+      if (!existingNames.has(f.name)) {
+        selectedFiles.push(f);
+        existingNames.add(f.name);
+      }
     }
     event.target.value = '';
     renderSelectedFiles();

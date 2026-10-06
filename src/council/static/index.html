@@ -5,9 +5,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LLM Council</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
-  <script type="text/javascript" src="https://unpkg.com/vis-network@10.1.0/standalone/umd/vis-network.min.js" integrity="sha384-Kp7cMaDnHOrgpE8FT6l7tUuGIo7kBcBVcttockpXN/whrsQBcy9ZcpKmr/1a/nMo" crossorigin="anonymous"></script>
+  <script src="/static/vendor/marked.umd.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/vendor/vis-network.min.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -19,9 +19,10 @@
       <p>Local multi-model review with live synthesis, memory, and hardware-aware routing.</p>
     </div>
     <div class="header-actions">
+      <button class="btn btn-small" onclick="openDialog('connectionModal')">Connection</button>
       <button class="btn btn-small btn-solid" onclick="resetSession()" title="Clear inputs, files, and cards to start fresh">Reset</button>
       <label class="theme-switch" title="Toggle Light/Dark Theme">
-        <input type="checkbox" id="themeToggle" onchange="toggleTheme()">
+        <input type="checkbox" id="themeToggle" aria-label="Dark theme" onchange="toggleTheme()">
         <span class="slider"></span>
       </label>
       <button class="btn btn-small" onclick="exportMemoryGraph()" title="Export council memory as a portable knowledge-graph JSON corpus">Export JSON</button>
@@ -40,7 +41,7 @@
         <div class="section-title">
           1. Review Local Project
         </div>
-        <input type="text" id="projectPathInput" placeholder="/absolute/path/to/your/project" oninput="scheduleProjectScan()">
+        <input type="text" id="projectPathInput" aria-label="Project directory" placeholder="Project directory" oninput="scheduleProjectScan()">
         <div class="inline-actions project-actions">
           <button class="btn btn-solid btn-small" id="projectReviewBtn" onclick="launchProjectReview()">Scan &amp; Review</button>
           <button class="btn btn-small" onclick="bulkIngestFolder()" title="Ingest all files into attachments">Bulk Ingest Files</button>
@@ -59,7 +60,7 @@
           2. Demo Presets &amp; Preflight
           <button class="btn btn-small" onclick="refreshPreflight()">Refresh checks</button>
         </div>
-        <select id="presetSelect" onchange="onPresetSelected(this.value)">
+        <select id="presetSelect" aria-label="Demo preset" onchange="onPresetSelected(this.value)">
           <option value="">Select a demo preset...</option>
         </select>
         <div class="helper-copy" id="presetDesc">Choose a preset to set models, starter topic text, and sample files.</div>
@@ -71,7 +72,7 @@
       <!-- 3. CONTEXT & ATTACHMENTS -->
       <div>
         <div class="section-title">3. Context / Topic</div>
-        <textarea id="topicText" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or review request..."></textarea>
+        <textarea id="topicText" aria-label="Review topic" maxlength="200000" placeholder="Paste a project brief, code graph summary, git diff, architecture notes, or review request..."></textarea>
         <div class="prompt-chips" id="promptChips">
           <button type="button" class="chip" onclick="insertPromptTemplate('security')">🛡️ Security Audit</button>
           <button type="button" class="chip" onclick="insertPromptTemplate('perf')">⚡ Perf Bottlenecks</button>
@@ -164,7 +165,7 @@
               <input type="password" id="keyGroq" placeholder="gsk_..." oninput="persistCloudKeys()">
             </div>
           </div>
-          <div class="helper-copy">Stored in this browser only. Sent as headers, never saved to disk.</div>
+          <div class="helper-copy">Keys stay in this tab until it closes or reloads.</div>
         </div>
       </details>
 
@@ -192,21 +193,35 @@
   </main>
 
   <!-- MODALS -->
+  <div class="modal-overlay" id="connectionModal">
+    <form class="modal-content connection-dialog" role="dialog" aria-modal="true" aria-labelledby="connectionTitle" onsubmit="connectServer(event)">
+      <div class="modal-header">
+        <span id="connectionTitle">Server connection</span>
+        <button type="button" class="btn btn-small" aria-label="Close connection" onclick="closeDialog('connectionModal')">X</button>
+      </div>
+      <div class="connection-body">
+        <label for="serverApiKey">Server API key</label>
+        <input type="password" id="serverApiKey" autocomplete="off" placeholder="COUNCIL_API_KEY">
+        <div id="connectionStatus" role="status"></div>
+        <button type="submit" class="btn btn-solid">Connect</button>
+      </div>
+    </form>
+  </div>
   <div class="modal-overlay" id="memoryModal">
-    <div class="modal-content">
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-header">
         <span id="modalTitle">Knowledge graph</span>
-        <button class="btn btn-small" onclick="closeMemory()">X</button>
+        <button class="btn btn-small" aria-label="Close graph" onclick="closeMemory()">X</button>
       </div>
       <div id="memoryNetwork"></div>
     </div>
   </div>
 
   <div class="modal-overlay" id="modelLibraryModal">
-    <div class="modal-content">
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="modelLibraryTitle">
       <div class="modal-header">
-        <span>Model Library</span>
-        <button class="btn btn-small" onclick="closeModelLibrary()">X</button>
+        <span id="modelLibraryTitle">Model Library</span>
+        <button class="btn btn-small" aria-label="Close model library" onclick="closeModelLibrary()">X</button>
       </div>
       <div id="modelLibraryBody" class="model-library-body">
         <div class="replay-empty">Loading models...</div>
@@ -215,18 +230,18 @@
   </div>
 
   <div class="modal-overlay" id="replayModal">
-    <div class="modal-content">
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="replayTitle">
       <div class="modal-header">
-        <span>Run replay & History</span>
+        <span id="replayTitle">Run history</span>
         <div style="display: flex; gap: 8px; align-items: center; margin-left: auto; margin-right: 8px;">
           <button class="btn btn-small btn-danger" id="clearAllReplaysBtn" onclick="deleteAllReplays()">Clear All History</button>
         </div>
-        <button class="btn btn-small" onclick="closeReplayModal()">X</button>
+        <button class="btn btn-small" aria-label="Close run history" onclick="closeReplayModal()">X</button>
       </div>
       <div class="replay-layout">
         <div class="replay-sidebar">
           <div class="replay-search-box">
-            <input type="text" id="replaySearchInput" class="replay-search-input" placeholder="Search past runs..." oninput="filterReplayRuns(this.value)">
+            <input type="text" id="replaySearchInput" aria-label="Search run history" class="replay-search-input" placeholder="Search past runs..." oninput="filterReplayRuns(this.value)">
           </div>
           <div id="replayRunList">
             <div class="replay-empty">Loading past runs...</div>

@@ -43,7 +43,7 @@ def main():
     
     total_issues = 0
     for root, dirs, files in os.walk('.'):
-        if any(ignore in root for ignore in ['.git', 'venv', '__pycache__', 'node_modules', '.agents', '.gemini']):
+        if any(ignore in root for ignore in ['.git', 'venv', '__pycache__', 'node_modules', 'vendor', '.agents', '.gemini']):
             continue
             
         for file in files:

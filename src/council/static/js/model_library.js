@@ -9,7 +9,7 @@ const MODEL_TIER_ORDER = ['light', 'medium', 'heavy', 'very_heavy'];
 async function openModelLibrary() {
   const modal = document.getElementById('modelLibraryModal');
   const body = document.getElementById('modelLibraryBody');
-  if (modal) modal.style.display = 'flex';
+  openDialog(modal.id);
   if (body) body.innerHTML = '<div class="replay-empty">Loading models...</div>';
 
   const data = await loadModelCatalog(true);
@@ -23,7 +23,7 @@ async function openModelLibrary() {
 
 function closeModelLibrary() {
   const modal = document.getElementById('modelLibraryModal');
-  if (modal) modal.style.display = 'none';
+  closeDialog(modal.id);
 }
 
 function renderModelCatalog(data, body) {
@@ -67,38 +67,39 @@ function renderModelCatalog(data, body) {
   body.innerHTML = html;
 }
 
-function pullModel(tag) {
+async function pullModel(tag) {
   const card = document.getElementById(`model-card-${tag}`);
   const btn = card ? card.querySelector('button') : null;
   const progressEl = document.getElementById(`model-progress-${tag}`);
   if (btn) { btn.disabled = true; btn.textContent = 'Downloading...'; }
   if (progressEl) progressEl.textContent = 'Starting download...';
 
-  const es = new EventSource(`/models/pull/stream?tag=${encodeURIComponent(tag)}`);
-  es.onmessage = (ev) => {
-    let data;
-    try { data = JSON.parse(ev.data); } catch { return; }
-
+  let completed = false;
+  try {
+    const response = await councilFetch(`/models/pull/stream?tag=${encodeURIComponent(tag)}`);
+    if (!response.ok) throw new Error(`Download failed (HTTP ${response.status}).`);
+    await readSse(response, data => {
     if (data.type === 'line' && progressEl) {
       progressEl.textContent = data.text;
     } else if (data.type === 'error' && progressEl) {
       progressEl.textContent = data.message;
     } else if (data.type === 'done') {
-      es.close();
+      completed = true;
       if (data.success) {
         if (progressEl) progressEl.textContent = 'Installed.';
         if (btn) btn.textContent = 'Installed';
         showToast(`${tag} installed.`);
+        loadModelCatalog(true).then(() => renderSeats());
         refreshPreflight();
       } else {
         if (btn) { btn.disabled = false; btn.textContent = 'Retry download'; }
         showToast(`Failed to download ${tag}.`);
       }
     }
-  };
-  es.onerror = () => {
-    es.close();
-    if (progressEl) progressEl.textContent = 'Connection lost.';
+    });
+    if (!completed) throw new Error('Download connection ended before completion.');
+  } catch (error) {
+    if (progressEl) progressEl.textContent = error.message || 'Connection lost.';
     if (btn) { btn.disabled = false; btn.textContent = 'Retry download'; }
-  };
+  }
 }

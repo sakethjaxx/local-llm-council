@@ -12,7 +12,7 @@ function renderSeats() {
     div.innerHTML = `
       <div class="seat-header">
         <div class="seat-dot" style="background: ${seat.color}; color: ${seat.color}"></div>
-        <div class="seat-title">${seat.icon} ${seat.label}</div>
+        <div class="seat-title">${escapeHtml(seat.icon)} ${escapeHtml(seat.label)}</div>
         <div class="seat-model ${ready ? '' : 'seat-model-missing'}" title="${escapeHtml(seat.model)}${ready ? '' : ' — not installed'}">${escapeHtml(seat.model.split('/').pop())}${ready ? '' : ' ⚠'}</div>
         ${!isChairman ? `<div class="seat-remove" onclick="removeSeat('${id}')" title="Remove seat">✕</div>` : ''}
       </div>
@@ -278,11 +278,11 @@ function initDragAndDrop() {
 function initKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      const modals = ['memoryModal', 'modelLibraryModal', 'replayModal'];
+      const modals = ['memoryModal', 'modelLibraryModal', 'replayModal', 'connectionModal'];
       for (const modalId of modals) {
         const modal = document.getElementById(modalId);
         if (modal && modal.style.display !== 'none' && modal.style.display !== '') {
-          modal.style.display = 'none';
+          closeDialog(modalId);
         }
       }
     }
@@ -296,5 +296,47 @@ function initKeyboardShortcuts() {
         launchProjectReview();
       }
     }
+  });
+}
+
+let dialogReturnFocus = null;
+
+function openDialog(id) {
+  const modal = document.getElementById(id);
+  if (!modal || modal.style.display === 'flex') return;
+  dialogReturnFocus = document.activeElement;
+  document.querySelectorAll('.modal-overlay').forEach(other => { other.style.display = 'none'; });
+  modal.style.display = 'flex';
+  document.querySelector('main').inert = true;
+  document.querySelector('header').inert = true;
+  modal.querySelector('input, button, select, textarea, [tabindex="0"]')?.focus();
+}
+
+function closeDialog(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.style.display = 'none';
+  if (id === 'memoryModal') {
+    activeGraph?.destroy();
+    activeGraph = null;
+  }
+  document.querySelector('main').inert = false;
+  document.querySelector('header').inert = false;
+  dialogReturnFocus?.focus();
+}
+
+function initDialogs() {
+  document.querySelectorAll('.modal-overlay').forEach(modal => {
+    modal.addEventListener('click', event => {
+      if (event.target === modal) closeDialog(modal.id);
+    });
+    modal.addEventListener('keydown', event => {
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(modal.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]'))
+        .filter(control => !control.disabled && control.getClientRects().length);
+      if (!controls.length) return;
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
   });
 }

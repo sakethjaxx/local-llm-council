@@ -20,9 +20,14 @@ class ApiBoundaryTests(unittest.TestCase):
 from fastapi.testclient import TestClient
 from council import main
 client = TestClient(main.app)
+assert client.get('/').status_code == 200  # Public shell supports browser sign-in.
 assert client.get('/health').status_code == 403
 assert client.get('/health', headers={{'X-API-Key': 'test-key'}}).json() == {{'status': 'ok'}}
 assert client.get('/', headers={{'X-API-Key': 'test-key'}}).status_code == 200
+bad_roster = client.post('/ollama/check', headers={{'X-API-Key': 'test-key'}}, json={{'council_config': {{'seat': {{'model': ''}}}}}})
+assert bad_roster.status_code == 422, bad_roster.text
+cross_site = client.post('/council/stream', headers={{'Origin': 'https://untrusted.example'}}, data={{'topic_text': 'review'}})
+assert cross_site.status_code == 403, cross_site.text
 blocked = client.post('/ingest/folder', headers={{'X-API-Key': 'test-key'}}, json={{
     'folder_path': {json.dumps(os.path.join(root, 'outside-link'))}, 'max_files': 1,
 }})

@@ -1,12 +1,12 @@
 async function openReplayModal() {
   const modal = document.getElementById('replayModal');
-  if (modal) modal.style.display = 'flex';
+  openDialog(modal.id);
   await loadReplayRuns();
 }
 
 function closeReplayModal() {
   const modal = document.getElementById('replayModal');
-  if (modal) modal.style.display = 'none';
+  closeDialog(modal.id);
 }
 
 async function loadReplayRuns() {
@@ -16,7 +16,7 @@ async function loadReplayRuns() {
   if (detail) detail.innerHTML = '<div class="replay-empty">Select a run to inspect its phases.</div>';
 
   try {
-    const resp = await fetch('/runs?limit=50');
+    const resp = await councilFetch('/runs?limit=50');
     const data = await resp.json();
     allLoadedReplays = data.runs || [];
     renderFilteredReplays(allLoadedReplays);
@@ -68,7 +68,7 @@ async function deleteSingleReplay(runId) {
   if (!runId) return;
   if (!confirm(`Delete run ${runId}? This will remove all associated phase outputs and skills.`)) return;
   try {
-    const resp = await fetch(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+    const resp = await councilFetch(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
     if (resp.ok) {
       showToast('Replay deleted.');
       await loadReplayRuns();
@@ -83,7 +83,7 @@ async function deleteSingleReplay(runId) {
 async function deleteAllReplays() {
   if (!confirm('Are you sure you want to delete ALL replay history? This cannot be undone.')) return;
   try {
-    const resp = await fetch('/runs', { method: 'DELETE' });
+    const resp = await councilFetch('/runs', { method: 'DELETE' });
     if (resp.ok) {
       showToast('All replay history cleared.');
       await loadReplayRuns();
@@ -126,7 +126,7 @@ async function loadReplayRunDetail(runId) {
   detail.innerHTML = '<div class="replay-empty">Loading run detail...</div>';
 
   try {
-    const resp = await fetch(`/runs/${encodeURIComponent(runId)}`);
+    const resp = await councilFetch(`/runs/${encodeURIComponent(runId)}`);
     const run = await resp.json();
     if (!run || !run.run_id) {
       detail.innerHTML = '<div class="replay-empty">Run not found.</div>';
@@ -174,15 +174,26 @@ async function loadReplayRunDetail(runId) {
   }
 }
 
-function downloadRunExport(runId) {
-  window.location.assign(`/runs/${encodeURIComponent(runId)}/export?format=md`);
+async function downloadRunExport(runId) {
+  try {
+    const response = await councilFetch(`/runs/${encodeURIComponent(runId)}/export?format=md`);
+    if (!response.ok) throw new Error('Could not export this run.');
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${runId}.md`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 async function recordActionFeedback(runId, actionIndex, rating, button) {
   if (!runId || !Number.isInteger(actionIndex)) return;
   button.disabled = true;
   try {
-    const resp = await fetch(`/runs/${encodeURIComponent(runId)}/feedback`, {
+    const resp = await councilFetch(`/runs/${encodeURIComponent(runId)}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action_index: actionIndex, rating }),

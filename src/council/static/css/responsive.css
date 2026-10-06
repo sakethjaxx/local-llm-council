@@ -269,7 +269,7 @@
     flex: 1 1 220px;
   }
   .header-actions {
-    width: 100%;
+    width: calc(100% - 46px);
     justify-content: flex-start;
     margin-left: 46px;
   }
@@ -439,6 +439,24 @@
 .copy-pr-btn:hover {
   background: var(--accent);
   color: #fff;
+}
+
+.connection-dialog { width: min(420px, calc(100vw - 24px)); height: auto; }
+.connection-body { display: grid; gap: 12px; padding: 20px; }
+.connection-body label { font-size: 13px; font-weight: 600; }
+.graph-status { padding: 20px; overflow: auto; }
+#connectionStatus { color: var(--danger); font-size: 12px; }
+.seat-title, .card-name, .modal-header, .replay-detail { min-width: 0; overflow-wrap: anywhere; }
+.seat-header, .card-header { flex-wrap: wrap; }
+.cards-grid { grid-template-columns: repeat(auto-fit, minmax(min(290px, 100%), 1fr)); }
+.phase-banner { max-width: 100%; font-size: 12px; overflow-wrap: anywhere; }
+.modal-header { flex-shrink: 0; }
+.theme-switch:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 999px; }
+
+@media (max-width: 400px) {
+  .header-actions { margin-left: 0; width: 100%; }
+  .btn-small { min-height: 32px; }
+  .model-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .file-token-chip {

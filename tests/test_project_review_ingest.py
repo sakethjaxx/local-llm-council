@@ -86,6 +86,21 @@ class PickTopFilesTests(unittest.TestCase):
 
 
 class ReadAttachmentsTests(unittest.TestCase):
+    def test_paths_symlinks_and_secret_aliases_cannot_escape_review(self):
+        with tempfile.TemporaryDirectory() as base:
+            root = os.path.join(base, "project")
+            os.mkdir(root)
+            outside = _write(base, "outside.py", "private-value")
+            secret = _write(root, ".env", "private-value")
+            os.symlink(outside, os.path.join(root, "link.py"))
+            os.symlink(secret, os.path.join(root, "secret.py"))
+            _write(root, "app.py", "print(1)")
+            paths = ["../outside.py", outside, "link.py", "secret.py", ".env", "app.py"]
+            attachments = main._read_files_as_attachments(root, paths)
+            graph = get_project_code_graph(root)
+        self.assertEqual([item["filename"] for item in attachments], ["app.py"])
+        self.assertEqual({node["id"] for node in graph["nodes"]}, {"app.py"})
+
     def test_per_file_cap_scales_with_file_count(self):
         with tempfile.TemporaryDirectory() as root:
             body = "x" * 200_000

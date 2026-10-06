@@ -1,6 +1,49 @@
 let activeCouncilAbortController = null;
 let memberTokenStats = {};
 let latestChairmanPayload = null;
+const pendingTokenRenders = new Map();
+
+function clearStreamState() {
+  for (const timer of pendingTokenRenders.values()) clearTimeout(timer);
+  pendingTokenRenders.clear();
+  memberTokenStats = {};
+  latestChairmanPayload = null;
+  ph2Section = null;
+  ph3Section = null;
+}
+
+async function readSse(response, onEvent) {
+  if (!response.body) throw new Error('Streaming is unavailable.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const dispatch = frame => {
+    const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).replace(/^ /, '')).join('\n');
+    if (data) onEvent(JSON.parse(data));
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop();
+      for (const frame of frames) dispatch(frame);
+      if (done) { if (buffer.trim()) dispatch(buffer); break; }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function renderStreamBody(key, card, member) {
+  pendingTokenRenders.delete(key);
+  if (!card.isConnected) return;
+  const body = card.querySelector('.card-body');
+  body.innerHTML = member === 'chairman'
+    ? `<pre>${escapeHtml(rawCardContents[key])}</pre>`
+    : renderMarkdown(rawCardContents[key]);
+}
 
 function stopActiveRun() {
   if (activeCouncilAbortController) {
@@ -18,8 +61,12 @@ async function launchCouncil() {
 
   const topic = document.getElementById('topicText')?.value.trim();
   if (!topic && !selectedFiles.length) return alert('Enter a topic or attach at least one file.');
+  const controller = new AbortController();
+  activeCouncilAbortController = controller;
   await refreshPreflight();
+  if (controller.signal.aborted) return;
   if (!preflightState || !preflightState.ready) {
+    if (activeCouncilAbortController === controller) activeCouncilAbortController = null;
     return alert('Demo preflight failed. Install the missing models or switch to a preset that matches your local setup.');
   }
 
@@ -32,6 +79,7 @@ async function launchCouncil() {
   }
 
   renderLoadingState(panel, 'Starting council run...');
+  clearStreamState();
   rawCardContents = {};
   thinkingCards = {};
   chatHistory = [];
@@ -47,14 +95,12 @@ async function launchCouncil() {
   if (document.getElementById('dynamicSwarmToggle')?.checked) formData.append('dynamic_swarm', true);
   if (document.getElementById('deepDebateToggle')?.checked) formData.append('deep_debate', true);
 
-  activeCouncilAbortController = new AbortController();
-
   try {
-    const resp = await fetch('/council/stream', {
+    const resp = await councilFetch('/council/stream', {
       method: 'POST',
       headers: cloudKeyHeaders(),
       body: formData,
-      signal: activeCouncilAbortController.signal
+      signal: controller.signal
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -64,33 +110,21 @@ async function launchCouncil() {
       return;
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const ev = JSON.parse(line.slice(6));
-            handleEvent(ev, panel);
-          } catch {}
-        }
-      }
-    }
+    let terminal = false;
+    await readSse(resp, ev => {
+      if (['done', 'error', 'shutdown'].includes(ev.type)) terminal = true;
+      handleEvent(ev, panel);
+    });
+    if (!terminal) throw new Error('Connection ended before the council completed.');
   } catch (err) {
     if (err.name !== 'AbortError') {
       showToast(err.message || 'SSE connection failed.');
       renderErrorState(panel, err.message);
     }
   } finally {
-    activeCouncilAbortController = null;
-    if (btn) {
+    const ownsRun = activeCouncilAbortController === controller;
+    if (ownsRun) activeCouncilAbortController = null;
+    if (btn && (ownsRun || !activeCouncilAbortController)) {
       btn.disabled = false;
       btn.classList.remove('btn-danger');
       btn.innerHTML = 'Run council';
@@ -119,15 +153,17 @@ async function launchProjectReview() {
     launchBtn.textContent = 'Stop council';
   }
   renderLoadingState(panel, `Scanning project at ${path.split('/').pop()} and preparing review...`);
+  clearStreamState();
   rawCardContents = {};
   thinkingCards = {};
   chatHistory = [];
   if (infoDiv) infoDiv.textContent = '';
 
-  activeCouncilAbortController = new AbortController();
+  const controller = new AbortController();
+  activeCouncilAbortController = controller;
 
   try {
-    const resp = await fetch('/council/review-project', {
+    const resp = await councilFetch('/council/review-project', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...cloudKeyHeaders() },
       body: JSON.stringify({
@@ -137,7 +173,7 @@ async function launchProjectReview() {
         token_budget_profile: tokenBudgetProfile,
         max_files: projectFileBudget(),
       }),
-      signal: activeCouncilAbortController.signal
+      signal: controller.signal
     });
 
     if (!resp.ok) {
@@ -148,20 +184,9 @@ async function launchProjectReview() {
       return;
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const ev = JSON.parse(line.slice(6));
+    let terminal = false;
+    await readSse(resp, ev => {
+            if (['done', 'error', 'shutdown'].includes(ev.type)) terminal = true;
             if (ev.type === 'project_info' && infoDiv) {
               infoDiv.textContent = `Scanned ${ev.total_files} files → reviewing ${ev.files_selected.length} files`;
               const preview = document.getElementById('projectFilePreview');
@@ -172,19 +197,18 @@ async function launchProjectReview() {
             } else {
               handleEvent(ev, panel);
             }
-          } catch {}
-        }
-      }
-    }
+    });
+    if (!terminal) throw new Error('Connection ended before the project review completed.');
   } catch (err) {
     if (err.name !== 'AbortError') {
       showToast(err.message || 'Project review connection failed.');
       renderErrorState(panel, err.message);
     }
   } finally {
-    activeCouncilAbortController = null;
+    const ownsRun = activeCouncilAbortController === controller;
+    if (ownsRun) activeCouncilAbortController = null;
     if (btn) { btn.disabled = false; btn.textContent = 'Scan & Review'; }
-    if (launchBtn) {
+    if (launchBtn && (ownsRun || !activeCouncilAbortController)) {
       launchBtn.disabled = false;
       launchBtn.classList.remove('btn-danger');
       launchBtn.textContent = 'Run council';
@@ -218,6 +242,7 @@ function playCompletionChime() {
     gain2.connect(ctx.destination);
     osc2.start(now + 0.12);
     osc2.stop(now + 0.55);
+    osc2.onended = () => ctx.close();
   } catch (e) {}
 }
 
@@ -312,9 +337,10 @@ function handleEvent(ev, panel) {
   }
 
   if (ev.type === 'phase_start') {
+    panel.querySelector('.run-skeleton')?.remove();
     const banner = document.createElement('div');
     banner.className = 'phase-banner';
-    banner.innerHTML = `<span>PHASE ${ev.phase} // ${ev.label.toUpperCase()}</span>`;
+    banner.textContent = `PHASE ${ev.phase} // ${String(ev.label || '').toUpperCase()}`;
     panel.appendChild(banner);
 
     const grid = document.createElement('div');
@@ -367,10 +393,8 @@ function handleEvent(ev, panel) {
         speedEl.textContent = `⚡ ${tps} tok/s · ${memberTokenStats[key].count} tok`;
       }
 
-      if (ev.member !== 'chairman') {
-        body.innerHTML = renderMarkdown(rawCardContents[key]);
-      } else {
-        body.innerHTML = `<pre>${escapeHtml(rawCardContents[key])}</pre>`;
+      if (!pendingTokenRenders.has(key)) {
+        pendingTokenRenders.set(key, setTimeout(() => renderStreamBody(key, existing, ev.member), 100));
       }
     }
     return;
@@ -382,6 +406,14 @@ function handleEvent(ev, panel) {
     else if (ph2Section && ph2Section.contains(thinkingCards[`${ev.member}-2`])) phase = 2;
     const key = `${ev.member}-${phase}`;
     const existing = thinkingCards[key];
+    if (existing) {
+      clearTimeout(pendingTokenRenders.get(key));
+      pendingTokenRenders.delete(key);
+      rawCardContents[key] = ev.full_text ?? rawCardContents[key] ?? '';
+      existing.querySelector('.typing')?.remove();
+      existing.querySelector('.card-body').style.display = 'block';
+      renderStreamBody(key, existing, ev.member);
+    }
     
     if (existing && ev.member === 'chairman') {
       const body = existing.querySelector('.card-body');
@@ -401,19 +433,24 @@ function handleEvent(ev, panel) {
           <div class="action-item-list">
             ${(data.action_items || []).map((a, idx) => `
               <label class="action-item-row" id="action-row-${idx}">
-                <input type="checkbox" class="action-checkbox" onchange="toggleActionDone(this, ${idx})">
+                <input type="checkbox" class="action-checkbox" data-action-index="${idx}">
                 <span class="action-text">${escapeHtml(a)}</span>
               </label>
             `).join('')}
           </div>
           <div style="display:flex; gap:8px; margin: 12px 0 16px 0; flex-wrap:wrap;">
-            <button class="btn btn-small copy-pr-btn" onclick="copyVerdictForGitHub()">📋 Copy for GitHub PR</button>
-            <button class="btn btn-small copy-pr-btn" onclick="copyVerdictForSlack()">💬 Copy for Slack</button>
+            <button class="btn btn-small copy-pr-btn" data-copy="github">Copy for GitHub PR</button>
+            <button class="btn btn-small copy-pr-btn" data-copy="slack">Copy for Slack</button>
           </div>
         `;
         if (data.consensus && data.consensus.length > 0) html += `<h3>Consensus:</h3><ul>${data.consensus.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
         if (data.disputes && data.disputes.length > 0) html += `<h3>Disputes:</h3><ul>${data.disputes.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`;
         body.innerHTML = sanitizeHtml(html);
+        body.querySelectorAll('.action-checkbox').forEach(checkbox => {
+          checkbox.addEventListener('change', () => toggleActionDone(checkbox, Number(checkbox.dataset.actionIndex)));
+        });
+        body.querySelector('[data-copy="github"]')?.addEventListener('click', copyVerdictForGitHub);
+        body.querySelector('[data-copy="slack"]')?.addEventListener('click', copyVerdictForSlack);
       } catch (e) {
         body.innerHTML = renderMarkdown(ev.full_text);
       }
@@ -462,7 +499,7 @@ function buildCard(member, meta, content, phase) {
         <div class="card-icon">${icon}</div>
         <div class="card-name">${label}</div>
       </div>
-      <div class="card-speedometer" id="speed-${member}-${phase}">⚡ 0.0 tok/s</div>
+      <div class="card-speedometer">0.0 tok/s</div>
     </div>
     <div class="typing"><span></span><span></span><span></span></div>
     <div class="card-body" style="display:none"></div>

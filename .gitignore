@@ -9,6 +9,8 @@ build/
 *.egg-info/
 .pytest_cache/
 .pytest-tmp/
+.audit-tmp/
+node_modules/
 data/*
 !data/.gitkeep
 council_metrics.jsonl

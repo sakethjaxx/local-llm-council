@@ -5,6 +5,7 @@ FastAPI backend with SSE streaming for real-time council progress
 
 import asyncio
 import copy
+import hmac
 import json
 import os
 import pathlib
@@ -23,6 +24,7 @@ from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, normalize_token_budget
 from demo_catalog import get_demo_catalog, load_presets
 from graph_exporter import export_to_graph_json
 from hardware_detect import get_default_council_config, get_hardware_suggestion, get_model_catalog
+from http_security import BrowserBoundaryMiddleware
 from logging_utils import get_logger
 from main_routes_helper import (
     DEFAULT_REVIEW_FILE_BUDGET,
@@ -51,6 +53,7 @@ from main_routes_helper import (
     stream_chat_lifecycle,
     stream_council_lifecycle,
     stream_review_project_lifecycle,
+    validate_council_config,
 )
 from memory_store import memory_store
 from metrics_store import metrics_store
@@ -81,7 +84,7 @@ from skill_registry import skill_registry
 logger = get_logger(__name__)
 APP_DIR = pathlib.Path(__file__).resolve().parent
 
-MAX_CONCURRENT_STREAMS = max(1, int(os.getenv("COUNCIL_MAX_CONCURRENT_RUNS", "4")))
+MAX_CONCURRENT_STREAMS = _int_env("COUNCIL_MAX_CONCURRENT_RUNS", 4)
 _OLLAMA_TAG_WHITELIST = {
     model_id.split("/", 1)[1] for model_id, caps in PROVIDER_MODELS.items() if caps.provider == "ollama"
 }
@@ -91,9 +94,12 @@ def _is_localhost(host: str) -> bool:
     return host.strip().lower() in {"127.0.0.1", "localhost"}
 
 
-def verify_api_key(x_api_key: str = Header(None)) -> None:
+def verify_api_key(request: Request, x_api_key: str = Header(None)) -> None:
+    # Only the static shell is public, so a browser can enter the server key.
+    if request.method == "GET" and request.url.path == "/":
+        return
     expected = os.getenv("COUNCIL_API_KEY", "").strip()
-    if expected and x_api_key != expected:
+    if expected and not hmac.compare_digest((x_api_key or "").encode(), expected.encode()):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -101,7 +107,7 @@ def require_api_key(x_api_key: str = Header(None)) -> None:
     expected = os.getenv("COUNCIL_API_KEY", "").strip()
     if not expected:
         raise HTTPException(status_code=403, detail="COUNCIL_API_KEY is required for this endpoint")
-    if x_api_key != expected:
+    if not hmac.compare_digest((x_api_key or "").encode(), expected.encode()):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -147,6 +153,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Local LLM Council", lifespan=lifespan, dependencies=[Depends(verify_api_key)])
 app.add_middleware(CORSMiddleware, allow_origins=_allowed_origins(), allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(BrowserBoundaryMiddleware, allowed_origins=_allowed_origins())
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 app.mount("/demo-samples", StaticFiles(directory=APP_DIR / "demo_samples"), name="demo-samples")
 
@@ -189,8 +196,14 @@ async def council_stream(
     attachments: Optional[list[UploadFile]] = File(None),
 ):
     _reject_if_overloaded()
+    if len(topic_text) > 200_000:
+        raise HTTPException(status_code=422, detail="Topic exceeds the 200,000 character limit.")
+    if not topic_text.strip() and not attachments:
+        raise HTTPException(status_code=422, detail="Enter a topic or attach at least one file.")
     parsed = await _parse_uploads(attachments, _int_env("COUNCIL_MAX_FILES", 10), _int_env("COUNCIL_MAX_UPLOAD_MB", 20), 50 * 1024 * 1024)
     cfg_dict, cfg_err = _parse_config_json(council_config)
+    if cfg_err:
+        raise HTTPException(status_code=422, detail="Council roster must be valid JSON.")
     budget = normalize_token_budget_profile(token_budget_profile)
     keys = _request_cloud_keys(request)
     return StreamingResponse(
@@ -203,6 +216,7 @@ async def council_stream(
 @app.post("/council/chat")
 async def council_chat(req: ChatRequest, request: Request):
     _reject_if_overloaded()
+    validate_council_config(req.council_config)
     keys = _request_cloud_keys(request)
     budget = normalize_token_budget_profile(req.token_budget_profile)
     run_id = metrics_store.start_run("chat", {"member_id": req.member_id})
@@ -215,22 +229,23 @@ async def council_chat(req: ChatRequest, request: Request):
 
 @app.get("/hardware/suggest")
 async def hardware_suggest(strategy: str = "auto"):
-    return get_hardware_suggestion(strategy=strategy)
+    return await asyncio.to_thread(get_hardware_suggestion, strategy=strategy)
 
 
 @app.get("/ollama/status")
 async def ollama_status():
-    return ensure_models_for_config(get_default_council_config(), auto_pull=False)
+    return await asyncio.to_thread(ensure_models_for_config, get_default_council_config(), auto_pull=False)
 
 
 @app.post("/ollama/check")
 async def ollama_check(req: ConfigCheckRequest):
-    return execute_ollama_check(req.council_config, req.attachment_names)
+    validate_council_config(req.council_config)
+    return await asyncio.to_thread(execute_ollama_check, req.council_config, req.attachment_names)
 
 
 @app.post("/ollama/bootstrap")
 async def ollama_bootstrap():
-    return ensure_models_for_config(get_default_council_config(), auto_pull=True)
+    return await asyncio.to_thread(ensure_models_for_config, get_default_council_config(), auto_pull=True)
 
 
 @app.get("/models/catalog")
@@ -256,7 +271,7 @@ async def models_pull_stream(tag: str):
 
 @app.get("/council/memory")
 async def get_memory():
-    return memory_store.get_graph_data()
+    return await asyncio.to_thread(memory_store.get_graph_data)
 
 
 @app.get("/memory-graph/export")
@@ -268,6 +283,7 @@ async def export_memory_graph(project_name: str = "local-llm-council"):
 
 @app.post("/council/review-project")
 async def review_project(req: ReviewProjectRequest, request: Request):
+    validate_council_config(req.council_config)
     _reject_if_overloaded()
     root = _confine_to_project_root(req.path)
     if not os.path.isdir(root):
@@ -384,12 +400,12 @@ async def get_quality_metrics(limit: int = 100):
 
 @app.get("/metrics")
 async def list_metrics(limit: int = 20):
-    return metrics_store.list_runs(limit=limit)
+    return await asyncio.to_thread(metrics_store.list_runs, limit=limit)
 
 
 @app.get("/metrics/runs")
 async def get_runs(limit: int = 20):
-    return {"runs": metrics_store.list_runs(limit=max(1, min(limit, 100)))}
+    return {"runs": await asyncio.to_thread(metrics_store.list_runs, limit=max(1, min(limit, 100)))}
 
 
 get_runs_metrics = get_runs
@@ -397,7 +413,7 @@ get_runs_metrics = get_runs
 
 @app.get("/metrics/summary")
 async def get_metrics_summary():
-    return metrics_store.get_summary()
+    return await asyncio.to_thread(metrics_store.get_summary)
 
 
 @app.get("/metrics/quality")

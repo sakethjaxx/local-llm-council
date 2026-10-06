@@ -1,0 +1,12 @@
+{
+  "name": "council-browser-verification",
+  "private": true,
+  "dependencies": {
+    "dompurify": "3.4.16",
+    "marked": "15.0.12",
+    "vis-network": "10.1.0"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

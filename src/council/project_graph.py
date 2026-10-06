@@ -3,6 +3,8 @@ import os
 import re
 from pathlib import Path
 
+from io_parser import _is_secret_file
+
 EXCLUDED_DIRS = {
     ".git", "__pycache__", "node_modules", "venv", ".env", "env",
     ".venv", "dist", "build", ".next", ".nuxt", "target", "vendor",
@@ -99,7 +101,9 @@ def _iter_source_files(repo_root: Path):
         ]
         for filename in files:
             path = Path(root) / filename
-            if path.suffix in SOURCE_SUFFIXES:
+            resolved = path.resolve()
+            if (path.suffix in SOURCE_SUFFIXES and resolved.is_relative_to(repo_root.resolve())
+                    and not _is_secret_file(filename) and not _is_secret_file(resolved.name)):
                 yield path
                 count += 1
                 if count >= MAX_GRAPH_FILES:

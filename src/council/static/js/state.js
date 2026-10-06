@@ -28,6 +28,7 @@ let selectedFiles = [];
 let demoCatalog = null;
 let preflightState = null;
 const CLOUD_KEY_STORAGE_KEY = 'llmCouncilCloudKeys';
+let cloudKeys = {};
 const THEME_STORAGE_KEY = 'llmCouncilTheme';
 let tokenBudgetProfile = 'balanced';
 
@@ -84,6 +85,10 @@ function renderMarkdown(text) {
 }
 
 function resetSession() {
+  stopActiveRun();
+  clearStreamState();
+  clearTimeout(projectScanTimer);
+  projectScanGeneration++;
   selectedFiles = [];
   rawCardContents = {};
   thinkingCards = {};
@@ -94,12 +99,14 @@ function resetSession() {
   const topicInput = document.getElementById('topicText');
   const projectInput = document.getElementById('projectPathInput');
   const scanInfo = document.getElementById('projectScanInfo');
+  const preview = document.getElementById('projectFilePreview');
   const presetSelect = document.getElementById('presetSelect');
   const presetDesc = document.getElementById('presetDesc');
 
   if (topicInput) topicInput.value = '';
   if (projectInput) projectInput.value = '';
   if (scanInfo) scanInfo.textContent = '';
+  if (preview) preview.replaceChildren();
   if (presetSelect) presetSelect.value = '';
   if (presetDesc) presetDesc.textContent = 'Choose a preset to set models, starter topic text, and sample files.';
   
@@ -127,6 +134,7 @@ function resetSession() {
   const btn = document.getElementById('launchBtn');
   if (btn) {
     btn.disabled = false;
+    btn.classList.remove('btn-danger');
     btn.innerHTML = 'Run council';
   }
 
@@ -139,15 +147,16 @@ function toggleTheme() {
 
   if (isDark) {
     document.body.setAttribute('data-theme', 'dark');
-    localStorage.setItem(THEME_STORAGE_KEY, 'dark');
+    try { localStorage.setItem(THEME_STORAGE_KEY, 'dark'); } catch {}
   } else {
     document.body.removeAttribute('data-theme');
-    localStorage.setItem(THEME_STORAGE_KEY, 'light');
+    try { localStorage.setItem(THEME_STORAGE_KEY, 'light'); } catch {}
   }
 }
 
 function initTheme() {
-  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_STORAGE_KEY); } catch {}
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const shouldBeDark = saved === 'dark' || (!saved && prefersDark);
 
@@ -169,6 +178,8 @@ function showToast(message) {
     stack = document.createElement('div');
     stack.id = 'toastStack';
     stack.className = 'toast-stack';
+    stack.setAttribute('role', 'status');
+    stack.setAttribute('aria-live', 'polite');
     document.body.appendChild(stack);
   }
   const toast = document.createElement('div');
@@ -202,24 +213,20 @@ function renderErrorState(panel, message) {
 }
 
 function loadCloudKeys() {
-  try {
-    return JSON.parse(localStorage.getItem(CLOUD_KEY_STORAGE_KEY) || '{}');
-  } catch (e) {
-    return {};
-  }
+  return cloudKeys;
 }
 
 function persistCloudKeys() {
-  const keys = {
+  cloudKeys = {
     openai: document.getElementById('keyOpenAI')?.value.trim() || '',
     anthropic: document.getElementById('keyAnthropic')?.value.trim() || '',
     gemini: document.getElementById('keyGemini')?.value.trim() || '',
     groq: document.getElementById('keyGroq')?.value.trim() || ''
   };
-  localStorage.setItem(CLOUD_KEY_STORAGE_KEY, JSON.stringify(keys));
 }
 
 function hydrateCloudKeys() {
+  try { localStorage.removeItem(CLOUD_KEY_STORAGE_KEY); } catch {}
   const keys = loadCloudKeys();
   if (document.getElementById('keyOpenAI')) document.getElementById('keyOpenAI').value = keys.openai || '';
   if (document.getElementById('keyAnthropic')) document.getElementById('keyAnthropic').value = keys.anthropic || '';
@@ -228,9 +235,41 @@ function hydrateCloudKeys() {
 }
 
 function clearCloudKeys() {
-  localStorage.removeItem(CLOUD_KEY_STORAGE_KEY);
+  cloudKeys = {};
   hydrateCloudKeys();
   showToast('Cloud API keys cleared.');
+}
+
+async function councilFetch(input, options = {}) {
+  const url = new URL(input, window.location.href);
+  if (url.origin !== window.location.origin) throw new Error('Council requests must stay on this server.');
+  const headers = new Headers(options.headers);
+  const key = document.getElementById('serverApiKey')?.value.trim();
+  if (key) headers.set('X-API-Key', key);
+  const response = await fetch(url, { ...options, headers, redirect: 'error' });
+  if (response.status === 403) {
+    const error = await response.clone().json().catch(() => ({}));
+    if (error.detail === 'Forbidden') openDialog('connectionModal');
+  }
+  return response;
+}
+
+async function connectServer(event) {
+  event.preventDefault();
+  const message = document.getElementById('connectionStatus');
+  message.textContent = 'Connecting...';
+  try {
+    const response = await councilFetch('/health');
+    if (!response.ok) throw new Error('Server key was not accepted.');
+    message.textContent = '';
+    closeDialog('connectionModal');
+    await Promise.all([fetchDemoCatalog(), loadModelCatalog(true), loadHardwareDefaults()]);
+    renderSeats();
+    await refreshPreflight();
+    showToast('Connected.');
+  } catch (error) {
+    message.textContent = error.message;
+  }
 }
 
 function setTokenBudgetProfile(profile) {

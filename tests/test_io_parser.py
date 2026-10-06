@@ -12,6 +12,25 @@ from io_parser import (
 
 
 class IOParserTests(unittest.TestCase):
+    def test_secret_uploads_are_excluded_without_echoing_contents(self):
+        for name in [".env", ".env.production", "prod.env", "nested/.env.local", "nested\\id_rsa", "client.key"]:
+            parsed = parse_uploaded_file(name, "text/plain", b"PASSWORD=private-value")
+            self.assertEqual(parsed["kind"], "unsupported")
+            self.assertNotIn("private-value", format_attachments_for_prompt([parsed]))
+
+    def test_ingest_file_symlinks_cannot_escape_or_alias_secrets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "project"
+            root.mkdir()
+            outside = Path(temp_dir) / "outside.txt"
+            outside.write_text("private-value", encoding="utf-8")
+            (root / ".env").write_text("PASSWORD=private-value", encoding="utf-8")
+            (root / "outside.txt").symlink_to(outside)
+            (root / "alias.txt").symlink_to(root / ".env")
+            (root / "app.py").write_text("print(1)", encoding="utf-8")
+            attachments = ingest_folder(str(root))
+        self.assertEqual([item["filename"] for item in attachments], ["app.py"])
+
     def test_truncate(self):
         short_text = "hello world"
         self.assertEqual(_truncate(short_text, 20), short_text)

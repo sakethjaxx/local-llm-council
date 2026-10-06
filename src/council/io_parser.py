@@ -1,8 +1,10 @@
 import re
+import asyncio
 import json
 import os
 import socket
 import ipaddress
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -30,33 +32,46 @@ def _truncate(value: str, limit: int = TEXT_CHAR_LIMIT) -> str:
     return value if len(value) <= limit else value[:limit] + "\n...[truncated]"
 
 
-def _is_safe_url(url: str) -> bool:
+def _public_url_address(url: str) -> str | None:
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.hostname.lower() == "localhost":
-            return False
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.hostname.lower() == "localhost" or parsed.username or parsed.password):
+            return None
         resolved = socket.getaddrinfo(parsed.hostname, None, type=socket.SOCK_STREAM)
-        return bool(resolved) and all(
+        if resolved and all(
             entry[4] and ipaddress.ip_address(entry[4][0]).is_global
             for entry in resolved
-        )
+        ):
+            return resolved[0][4][0]
+        return None
     except Exception:
-        return False
+        return None
+
+
+def _is_safe_url(url: str) -> bool:
+    return _public_url_address(url) is not None
 
 
 async def _fetch_url_bytes(client: httpx.AsyncClient, url: str) -> tuple[bytes, httpx.Headers, str] | None:
     current_url = url
     for _ in range(MAX_REDIRECTS + 1):
-        if not _is_safe_url(current_url):
+        address = await asyncio.to_thread(_public_url_address, current_url)
+        if not address:
             logger.warning("url_fetch_blocked", extra={"url": current_url})
             return None
 
-        async with client.stream("GET", current_url, follow_redirects=False) as resp:
+        original = httpx.URL(current_url)
+        pinned = original.copy_with(host=address)
+        # Connect only to the validated IP; keep the original TLS identity.
+        async with client.stream("GET", pinned, follow_redirects=False,
+                                 headers={"Host": original.netloc.decode("ascii")},
+                                 extensions={"sni_hostname": original.host}) as resp:
             if 300 <= resp.status_code < 400:
                 location = resp.headers.get("location")
                 if not location:
                     resp.raise_for_status()
-                current_url = urljoin(str(resp.url), location)
+                current_url = urljoin(current_url, location)
                 continue
 
             resp.raise_for_status()
@@ -92,8 +107,16 @@ def _parse_image_attachment(filename: str, content_type: str) -> dict:
 
 
 def _parse_pdf_attachment(filename: str, content_type: str, raw: bytes) -> dict:
-    doc = fitz.open(stream=raw, filetype="pdf")
-    pdf_text = "".join(page.get_text() for page in doc)
+    with fitz.open(stream=raw, filetype="pdf") as doc:
+        parts = []
+        remaining = TEXT_CHAR_LIMIT + 1
+        for page in doc:
+            text = page.get_text()[:remaining]
+            parts.append(text)
+            remaining -= len(text)
+            if remaining <= 0:
+                break
+        pdf_text = "".join(parts)
     return {
         "kind": "text",
         "filename": filename or "document.pdf",
@@ -130,6 +153,10 @@ def parse_uploaded_file(filename: str, content_type: str, raw: bytes) -> dict:
     normalized_name = (filename or "attachment").lower()
     normalized_type = (content_type or "application/octet-stream").lower()
     safe_name = filename or "attachment"
+
+    if _is_secret_file(normalized_name.replace("\\", "/").rsplit("/", 1)[-1]):
+        return {"kind": "unsupported", "filename": safe_name, "content_type": normalized_type,
+                "summary": "Secret-bearing attachments are excluded from council inputs."}
 
     try:
         if normalized_type.startswith("image/"):
@@ -184,17 +211,13 @@ def format_attachments_for_prompt(attachments: list[dict], max_total_chars: int 
 
 
 async def parse_input(text: str) -> str:
-    urls = url_pattern.findall(text)
+    urls = list(dict.fromkeys(url_pattern.findall(text)))[:10]
     if not urls or os.getenv("COUNCIL_ALLOW_URL_FETCH", "false").strip().lower() != "true":
         return text
 
     scraped_data = []
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
         for url in urls:
-            if not _is_safe_url(url):
-                logger.warning("url_fetch_blocked", extra={"url": url})
-                continue
-
             logger.info("url_fetch_started", extra={"url": url})
             try:
                 fetched = await _fetch_url_bytes(client, url)
@@ -204,8 +227,8 @@ async def parse_input(text: str) -> str:
                 content_type = headers.get("content-type", "").lower()
 
                 if final_url.lower().endswith(".pdf") or content_type.startswith("application/pdf"):
-                    doc = fitz.open(stream=body, filetype="pdf")
-                    pdf_text = "".join(page.get_text() for page in doc)
+                    parsed_pdf = await asyncio.to_thread(_parse_pdf_attachment, "remote.pdf", "application/pdf", body)
+                    pdf_text = parsed_pdf["text"]
                     scraped_data.append(f"--- CONTENT FROM {final_url} ---\n{pdf_text[:10000]}")
                 else:
                     soup = BeautifulSoup(body, "html.parser")
@@ -249,14 +272,14 @@ def ingest_folder(folder_path: str, max_files: int = 50) -> list[dict]:
     """Bulk ingest a local directory, parsing up to max_files supported attachments.
     Uses Ponytail (KISS/YAGNI) rules to skip build noise, auto-truncate text,
     and output clean prompt-ready attachment representations."""
-    root = os.path.abspath(folder_path)
+    root = os.path.realpath(folder_path)
     if not os.path.exists(root) or not os.path.isdir(root):
         logger.warning("ingest_folder_not_found", extra={"folder_path": folder_path})
         return []
 
     attachments = []
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_INGEST_DIRS]
+        dirs[:] = [d for d in dirs if d not in SKIP_INGEST_DIRS and not Path(dirpath, d).is_symlink()]
         for fname in sorted(files):
             if len(attachments) >= max_files:
                 break
@@ -264,13 +287,18 @@ def ingest_folder(folder_path: str, max_files: int = 50) -> list[dict]:
                 logger.info("ingest_folder_skipped_secret_file", extra={"file": fname})
                 continue
             full_path = os.path.join(dirpath, fname)
+            resolved = Path(full_path).resolve()
+            if not resolved.is_relative_to(Path(root)) or _is_secret_file(resolved.name):
+                continue
             rel_name = os.path.relpath(full_path, root)
             ext = os.path.splitext(fname)[1].lower()
             try:
                 if os.path.getsize(full_path) > MAX_FETCH_BYTES:
                     continue
                 with open(full_path, "rb") as f:
-                    raw = f.read()
+                    raw = f.read(MAX_FETCH_BYTES + 1)
+                if len(raw) > MAX_FETCH_BYTES:
+                    continue
                 if ext != ".pdf" and b"\x00" in raw[:8192]:
                     continue  # binary (image, archive, database): noise in a prompt
                 ctype = "application/json" if ext == ".json" else ("application/pdf" if ext == ".pdf" else "text/plain")

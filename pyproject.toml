@@ -28,13 +28,13 @@ dependencies = [
   "python-dotenv==1.2.2",
   "Pillow==12.3.0",
   "httpx[socks]==0.28.1",
-  "litellm==1.84.10",
+  "litellm==1.88.6",
   "beautifulsoup4==4.14.3",
   "PyMuPDF==1.27.2.3",
   "duckduckgo_search==8.1.1",
   "numpy==2.4.4",
   "psutil==7.2.2",
-  "sentence-transformers==5.4.1",
+  "sentence-transformers==5.6.0",
   "tiktoken==0.12.0",
 ]
 
@@ -56,6 +56,9 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 include = ["council"]
 
+[tool.setuptools]
+include-package-data = false
+
 [tool.setuptools.package-data]
 council = [
   "agent_prompts/**/*",
@@ -67,6 +70,8 @@ council = [
   "static/*.css",
   "static/js/*.js",
   "static/css/*.css",
+  "static/vendor/*.js",
+  "static/vendor/LICENSE.*.txt",
 ]
 
 [tool.pytest.ini_options]

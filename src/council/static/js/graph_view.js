@@ -1,11 +1,33 @@
+let activeGraph = null;
+
+function renderGraph(container, data, options) {
+  activeGraph?.destroy();
+  activeGraph = null;
+  container.replaceChildren();
+  if (!data.nodes?.length) {
+    const empty = document.createElement('div');
+    empty.className = 'replay-empty graph-status';
+    empty.textContent = 'No graph data yet.';
+    container.appendChild(empty);
+  } else if (window.vis?.Network) {
+    activeGraph = new vis.Network(container, data, options);
+  } else {
+    const fallback = document.createElement('pre');
+    fallback.className = 'graph-status';
+    fallback.textContent = data.nodes.map(node => node.label || node.id).join('\n');
+    container.appendChild(fallback);
+  }
+}
+
 async function viewMemory() {
   const modal = document.getElementById('memoryModal');
   const title = document.getElementById('modalTitle');
   if (title) title.textContent = 'Council Knowledge Graph';
-  if (modal) modal.style.display = 'flex';
+  openDialog(modal.id);
   
   try {
-    const resp = await fetch('/council/memory');
+    const resp = await councilFetch('/council/memory');
+    if (!resp.ok) throw new Error('Memory graph request failed.');
     const data = await resp.json();
 
     const edgeColors = {
@@ -37,17 +59,17 @@ async function viewMemory() {
       physics: { barnesHut: { gravitationalConstant: -2800, centralGravity: 0.3 } }
     };
 
-    if (window.vis && window.vis.Network) {
-      new vis.Network(container, { nodes: data.nodes, edges: formattedEdges }, options);
-    }
+    if (modal.style.display === 'flex') renderGraph(container, { nodes: data.nodes, edges: formattedEdges }, options);
   } catch (e) {
     alert("Failed to load memory graph.");
   }
 }
 
 function closeMemory() {
+  activeGraph?.destroy();
+  activeGraph = null;
   const modal = document.getElementById('memoryModal');
-  if (modal) modal.style.display = 'none';
+  closeDialog(modal.id);
 }
 
 async function viewCodeGraph() {
@@ -56,11 +78,11 @@ async function viewCodeGraph() {
   const title = pathInput ? `Code Graph: ${pathInput.split('/').pop()}` : 'Project Code Graph';
   const modalTitle = document.getElementById('modalTitle');
   if (modalTitle) modalTitle.textContent = title;
-  if (modal) modal.style.display = 'flex';
+  openDialog(modal.id);
 
   try {
     const url = pathInput ? `/project/code-graph?path=${encodeURIComponent(pathInput)}` : '/project/code-graph';
-    const resp = await fetch(url);
+    const resp = await councilFetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
@@ -81,9 +103,7 @@ async function viewCodeGraph() {
       physics: { barnesHut: { gravitationalConstant: -2200, centralGravity: 0.28 } }
     };
 
-    if (window.vis && window.vis.Network) {
-      new vis.Network(container, { nodes: data.nodes, edges: data.edges }, options);
-    }
+    if (modal.style.display === 'flex') renderGraph(container, { nodes: data.nodes, edges: data.edges }, options);
   } catch (e) {
     alert("Failed to load project code graph.");
   }

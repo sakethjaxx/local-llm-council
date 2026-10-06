@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+import threading
 from unittest.mock import patch
 
 
@@ -134,6 +135,30 @@ from shutdown_state import clear_shutdown_request
 
 
 class MainRoutesTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_ollama_probe_does_not_block_health(self):
+        import asyncio
+        started, release = threading.Event(), threading.Event()
+
+        def slow_probe(*args, **kwargs):
+            started.set()
+            release.wait(2)
+            return {"ready": True}
+
+        with patch.object(main, "ensure_models_for_config", side_effect=slow_probe):
+            probe = asyncio.create_task(main.ollama_status())
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                self.assertEqual(await asyncio.wait_for(main.health(), timeout=0.2), {"status": "ok"})
+            finally:
+                release.set()
+                await probe
+
+    def test_invalid_rosters_fail_at_request_boundary(self):
+        from main_routes_helper import validate_council_config
+        for roster in [[], "invalid", {"bad-id": {"model": "ollama/test"}}, {"chairman": "not-a-seat"}, {"seat": {"model": ""}}]:
+            with self.assertRaises(main.HTTPException):
+                validate_council_config(roster)
+
     def setUp(self):
         with metrics_store._lock:
             metrics_store._active_runs.clear()

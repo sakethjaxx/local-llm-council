@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from budget_profiles import DEFAULT_TOKEN_BUDGET_PROFILE, TOKEN_BUDGET_PROFILES
 from cloud_keys import extract_cloud_keys
 from hardware_detect import get_default_council_config
-from io_parser import format_attachments_for_prompt, ingest_folder, parse_uploaded_file
+from io_parser import _is_secret_file, format_attachments_for_prompt, ingest_folder, parse_uploaded_file
 from logging_utils import get_logger
 from metrics_store import metrics_store
 from ollama_manager import auto_pull_enabled, ensure_models_for_config
@@ -198,11 +198,14 @@ def _pick_top_files(graph_data: dict, k: int = DEFAULT_REVIEW_FILE_BUDGET) -> li
 def _read_files_as_attachments(root: str, rel_paths: list[str]) -> list[dict]:
     root_path = pathlib.Path(root).resolve()
     attachments = []
-    per_file_cap = max(2_000, REVIEW_CHAR_BUDGET // max(1, len(rel_paths)))
+    per_file_cap = max(1, REVIEW_CHAR_BUDGET // max(1, len(rel_paths)))
     for rel in rel_paths:
-        full = root_path / rel
         try:
-            text = full.read_text(encoding="utf-8", errors="replace")[:per_file_cap]
+            full = (root_path / rel).resolve()
+            if not full.is_relative_to(root_path) or _is_secret_file(full.name) or _is_secret_file(pathlib.Path(rel).name):
+                continue
+            with full.open(encoding="utf-8", errors="replace") as source:
+                text = source.read(per_file_cap)
             attachments.append({
                 "kind": "text",
                 "filename": rel,
@@ -234,7 +237,7 @@ async def _parse_uploads(
         total_bytes += len(raw)
         if total_bytes > max_total_bytes:
             raise HTTPException(status_code=400, detail="Total attachment size exceeds 50MB limit")
-        parsed = parse_uploaded_file(upload.filename, upload.content_type or "application/octet-stream", raw)
+        parsed = await asyncio.to_thread(parse_uploaded_file, upload.filename, upload.content_type or "application/octet-stream", raw)
         if parsed.get("kind") == "image":
             parsed["data"] = base64.b64encode(raw).decode()
         parsed_attachments.append(parsed)
@@ -245,11 +248,29 @@ def _parse_config_json(council_config: Optional[str]) -> tuple[Optional[dict], O
     if not council_config:
         return None, None
     try:
-        return json.loads(council_config), None
+        config = json.loads(council_config)
+        validate_council_config(config)
+        return config, None
     except (json.JSONDecodeError, ValueError) as exc:
         err = str(exc)
         logger.warning("council_config_parse_failed", extra={"error": err})
         return None, err
+
+
+def validate_council_config(config: Optional[dict]) -> None:
+    if config is None:
+        return
+    if not isinstance(config, dict) or not config or len(config) > 16:
+        raise HTTPException(status_code=422, detail="Council roster must contain 1-16 seats.")
+    for seat_id, seat in config.items():
+        if not isinstance(seat_id, str) or not seat_id.replace("_", "").isalnum() or len(seat_id) > 64:
+            raise HTTPException(status_code=422, detail="Seat IDs must use letters, numbers, or underscores (up to 64 characters).")
+        if not isinstance(seat, dict) or not isinstance(seat.get("model"), str) or not seat["model"].strip():
+            raise HTTPException(status_code=422, detail="Each seat requires a non-empty model ID.")
+        for field in ("model", "label", "icon", "color", "persona"):
+            value = seat.get(field, "")
+            if not isinstance(value, str) or len(value) > (20_000 if field == "persona" else 256):
+                raise HTTPException(status_code=422, detail=f"Invalid seat {field}.")
 
 
 async def execute_export_run(run_store, run_id: str, format: str = "md"):
@@ -362,11 +383,12 @@ def start_server():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         if s.connect_ex((host, port)) == 0:
-            print(f"\n⚠️  Port {port} is already in use by another process.")
-            print(f"👉 Free the port with:  lsof -ti :{port} | xargs kill -9")
-            print(f"👉 Or use a different port:  COUNCIL_PORT=8766 python run.py\n")
-            raise SystemExit(1)
+            # ASCII only: a redirected stdout on Windows is cp1252 and cannot encode emoji.
+            raise SystemExit(
+                f"Port {port} is already in use by another process.\n"
+                f"Stop that process, or pick another port, e.g. COUNCIL_PORT={port + 1} council-serve"
+            )
 
     reload = os.getenv("COUNCIL_RELOAD", "false").strip().lower() == "true"
-    print(f"\n🚀 LLM Council starting on http://{host}:{port}")
+    print(f"LLM Council starting on http://{host}:{port}", flush=True)
     uvicorn.run("council.main:app", host=host, port=port, reload=reload)
