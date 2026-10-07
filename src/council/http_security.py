@@ -44,6 +44,35 @@ def api_key_valid(provided: str | None) -> bool:
     return not expected or hmac.compare_digest((provided or "").encode(), expected.encode())
 
 
+def _is_loopback(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
+
+def _network_rejection(scope, headers) -> tuple[int, str] | None:
+    """Without an API key only local clients, addressing the server by a local name, get in."""
+    if os.getenv("COUNCIL_API_KEY", "").strip():
+        return None
+    try:
+        hostname = urlsplit("http://" + headers.get("host", "")).hostname
+    except ValueError:
+        hostname = None
+    if hostname not in {"localhost", "127.0.0.1", "::1"}:
+        return 400, "Untrusted host"  # DNS rebinding
+    client = scope.get("client")
+    if client and client[0] != "testclient" and not _is_loopback(client[0]):
+        return 403, "Remote access requires COUNCIL_API_KEY"
+    return None
+
+
+def _auth_rejection(scope, headers) -> tuple[int, str] | None:
+    if _is_public(scope["method"], scope["path"]) or api_key_valid(headers.get("x-api-key")):
+        return None
+    return 403, "Forbidden"
+
+
 class BrowserBoundaryMiddleware:
     def __init__(self, app, allowed_origins, max_runs: int = 4, max_body_bytes: int = MAX_BODY_BYTES):
         self.app = app
@@ -70,31 +99,23 @@ class BrowserBoundaryMiddleware:
                 release_run_slot()
 
     def _reject(self, scope, headers) -> tuple[int, str] | None:
-        host = headers.get("host", "")
-        try:
-            hostname = urlsplit("http://" + host).hostname
-        except ValueError:
-            hostname = None
-        keyed = bool(os.getenv("COUNCIL_API_KEY", "").strip())
-        if not keyed and hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return 400, "Untrusted host"
-        client = scope.get("client")
-        if not keyed and client and client[0] != "testclient":
-            try:
-                local = ipaddress.ip_address(client[0]).is_loopback
-            except ValueError:
-                local = False
-            if not local:
-                return 403, "Remote access requires COUNCIL_API_KEY"
-        method, path = scope["method"], scope["path"]
+        """First failing check, in order: network, browser origin, API key, declared size."""
+        return (_network_rejection(scope, headers)
+                or self._origin_rejection(scope, headers)
+                or _auth_rejection(scope, headers)
+                or self._size_rejection(headers))
+
+    def _origin_rejection(self, scope, headers) -> tuple[int, str] | None:
         origin = headers.get("origin")
-        same_origin = f"{scope.get('scheme', 'http')}://{host}"
+        same_origin = f"{scope.get('scheme', 'http')}://{headers.get('host', '')}"
         allowed = origin and (origin == same_origin or origin in self.allowed_origins or "*" in self.allowed_origins)
-        if (origin and not allowed) or (headers.get("sec-fetch-site") == "cross-site" and not allowed
-                                      and not (method == "GET" and path == "/")):
+        cross_site = headers.get("sec-fetch-site") == "cross-site"
+        shell = scope["method"] == "GET" and scope["path"] == "/"
+        if (origin and not allowed) or (cross_site and not allowed and not shell):
             return 403, "Untrusted browser origin"
-        if not _is_public(method, path) and not api_key_valid(headers.get("x-api-key")):
-            return 403, "Forbidden"
+        return None
+
+    def _size_rejection(self, headers) -> tuple[int, str] | None:
         try:
             declared = int(headers.get("content-length", "0") or 0)
         except ValueError:
