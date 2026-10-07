@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from project_graph import ProjectGraph, build_project_graph, get_project_code_graph
 
@@ -73,6 +74,55 @@ class ProjectGraphTests(unittest.TestCase):
             graph = build_project_graph(root)
             self.assertEqual(graph.number_of_nodes(), 2)
             self.assertEqual(graph.predecessors("src/my_pkg/__init__.py"), ["app.py"])
+
+
+class ProjectGraphLimitTests(unittest.TestCase):
+    def test_small_repo_reports_no_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a.py").write_text("import b\n", encoding="utf-8")
+            Path(tmp, "b.py").write_text("X = 1\n", encoding="utf-8")
+            truncation = get_project_code_graph(tmp)["stats"]["truncation"]
+        self.assertEqual({k: truncation[k] for k in ("files", "input_bytes", "edges", "skipped_large_files")},
+                         {"files": False, "input_bytes": False, "edges": False, "skipped_large_files": 0})
+        self.assertEqual(truncation["limits"], {"max_files": 4000, "max_file_bytes": 1048576,
+                                                "max_input_bytes": 16777216, "max_edges": 20000})
+
+    def test_oversized_file_is_listed_but_never_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a.py").write_text("import big\n", encoding="utf-8")
+            Path(tmp, "big.py").write_text("import a\n" + "#" * (1024 * 1024 + 10), encoding="utf-8")
+            graph = get_project_code_graph(tmp)
+        self.assertIn("big.py", [n["id"] for n in graph["nodes"]])
+        self.assertEqual(graph["stats"]["truncation"]["skipped_large_files"], 1)
+        self.assertEqual([(e["from"], e["to"]) for e in graph["edges"]], [("a.py", "big.py")])  # none out of big.py
+        self.assertIn("partial graph", graph["review_input"])
+
+    def test_file_input_and_edge_limits_stop_work_and_say_so(self):
+        import project_graph
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(10):
+                Path(tmp, f"m{i}.py").write_text("".join(f"import m{j}\n" for j in range(10) if j != i), encoding="utf-8")
+            with patch.object(project_graph, "MAX_GRAPH_FILES", 6), \
+                    patch.object(project_graph, "MAX_GRAPH_EDGES", 7), \
+                    patch.object(project_graph, "MAX_GRAPH_INPUT_BYTES", 200):
+                graph = get_project_code_graph(tmp)
+        truncation = graph["stats"]["truncation"]
+        self.assertEqual(graph["stats"]["files"], 6)
+        self.assertLessEqual(graph["stats"]["edges"], 7)
+        self.assertTrue(truncation["files"] and truncation["input_bytes"])
+        self.assertIn("partial graph", graph["review_input"])
+
+    def test_edge_limit_alone(self):
+        import project_graph
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(8):
+                Path(tmp, f"m{i}.py").write_text("".join(f"import m{j}\n" for j in range(8) if j != i), encoding="utf-8")
+            with patch.object(project_graph, "MAX_GRAPH_EDGES", 5):
+                graph = get_project_code_graph(tmp)
+        self.assertEqual(graph["stats"]["edges"], 5)
+        self.assertTrue(graph["stats"]["truncation"]["edges"])
 
 
 if __name__ == "__main__":

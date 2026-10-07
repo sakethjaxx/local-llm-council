@@ -90,9 +90,12 @@ class ProjectGraph:
 
 
 MAX_GRAPH_FILES = 4000
+MAX_GRAPH_FILE_BYTES = 1024 * 1024
+MAX_GRAPH_INPUT_BYTES = 16 * 1024 * 1024
+MAX_GRAPH_EDGES = 20_000
 
 
-def _iter_source_files(repo_root: Path):
+def _iter_source_files(repo_root: Path, truncation: dict | None = None):
     count = 0
     for root, dirs, files in os.walk(repo_root):
         dirs[:] = [
@@ -104,10 +107,12 @@ def _iter_source_files(repo_root: Path):
             resolved = path.resolve()
             if (path.suffix in SOURCE_SUFFIXES and resolved.is_relative_to(repo_root.resolve())
                     and not _is_secret_file(filename) and not _is_secret_file(resolved.name)):
+                if count >= MAX_GRAPH_FILES:
+                    if truncation is not None:
+                        truncation["files"] = True
+                    return
                 yield path
                 count += 1
-                if count >= MAX_GRAPH_FILES:
-                    return
 
 
 def _relative_module_path(module_name: str) -> str:
@@ -129,7 +134,14 @@ def _iter_text_references(content: str):
         yield match
 
 
-def _resolve_reference(ref: str, from_rel: str, known_rel_paths: set[str]):
+def _by_basename(known_rel_paths: set[str]) -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    for rel in known_rel_paths:
+        index.setdefault(rel.rsplit("/", 1)[-1], []).append(rel)
+    return index
+
+
+def _resolve_reference(ref: str, from_rel: str, known_rel_paths: set[str], by_name: dict | None = None):
     """Map a raw import/asset string onto real files in the graph.
 
     Relative specifiers resolve against the importing file's directory so that
@@ -156,11 +168,11 @@ def _resolve_reference(ref: str, from_rel: str, known_rel_paths: set[str]):
     if not basename:
         return
     stems = [basename] if "." in basename else [basename + ext for ext in _IMPLICIT_EXTS]
-    for candidate in known_rel_paths:
-        if candidate == from_rel:
-            continue
-        if any(candidate.endswith("/" + stem) or candidate == stem for stem in stems):
-            yield candidate
+    by_name = by_name if by_name is not None else _by_basename(known_rel_paths)
+    for stem in stems:
+        for candidate in sorted(by_name.get(stem, ())):
+            if candidate != from_rel:
+                yield candidate
 
 
 def _resolve_relative_import(module_name: str | None, from_dir: str, level: int, known_rel_paths: set[str]) -> str | None:
@@ -220,17 +232,42 @@ def _resolve_python_import(module_name: str | None, from_rel: str, known_rel_pat
 
 
 def build_project_graph(repo_root: str | Path = ".") -> ProjectGraph:
+    """Dependency graph of the repo, bounded per file, in total input, files and edges.
+
+    graph.truncation records which limit was hit so callers can say the graph is partial.
+    """
     root = Path(repo_root).resolve()
     graph = ProjectGraph()
+    truncation = {"files": False, "input_bytes": False, "edges": False, "skipped_large_files": 0}
+    graph.truncation = truncation
 
-    source_files = list(_iter_source_files(root))
+    source_files = list(_iter_source_files(root, truncation))
     rel_paths = {path: str(path.relative_to(root)).replace(os.sep, "/") for path in source_files}
     known_rel_paths = set(rel_paths.values())
+    by_name = _by_basename(known_rel_paths)
+    bytes_read = 0
+
+    def add_edge(source: str, target: str, kind: str) -> None:
+        if graph.number_of_edges() >= MAX_GRAPH_EDGES:
+            truncation["edges"] = True
+            return
+        graph.add_edge(source, target, kind=kind)
 
     for path, rel_path in rel_paths.items():
         graph.add_node(rel_path)
+        if truncation["input_bytes"]:
+            continue  # still listed, no longer parsed
         try:
-            content = path.read_text(encoding="utf-8")
+            size = path.stat().st_size
+            if size > MAX_GRAPH_FILE_BYTES:
+                truncation["skipped_large_files"] += 1
+                continue
+            if bytes_read + size > MAX_GRAPH_INPUT_BYTES:
+                truncation["input_bytes"] = True
+                continue
+            with path.open(encoding="utf-8") as handle:
+                content = handle.read(MAX_GRAPH_FILE_BYTES)
+            bytes_read += size
         except Exception:
             continue
 
@@ -245,15 +282,15 @@ def build_project_graph(repo_root: str | Path = ".") -> ProjectGraph:
                     for name in node.names:
                         target = _resolve_python_import(name.name, rel_path, known_rel_paths, level=0)
                         if target and target != rel_path:
-                            graph.add_edge(rel_path, target, kind="import")
+                            add_edge(rel_path, target, "import")
                 elif isinstance(node, ast.ImportFrom):
                     target = _resolve_python_import(node.module, rel_path, known_rel_paths, level=getattr(node, "level", 0))
                     if target and target != rel_path:
-                        graph.add_edge(rel_path, target, kind="import_from")
+                        add_edge(rel_path, target, "import_from")
         else:
             for ref in _iter_text_references(content):
-                for candidate in _resolve_reference(ref, rel_path, known_rel_paths):
-                    graph.add_edge(rel_path, candidate, kind="asset_ref")
+                for candidate in _resolve_reference(ref, rel_path, known_rel_paths, by_name):
+                    add_edge(rel_path, candidate, "asset_ref")
 
     return graph
 
@@ -290,6 +327,13 @@ def get_project_code_graph(repo_root: str | Path = ".") -> dict:
     if isolated:
         summary_lines.append("- Isolated files:")
         summary_lines.extend(f"  - {node}" for node in isolated[:10])
+    truncation = graph.truncation
+    limits_hit = [name for name in ("files", "input_bytes", "edges") if truncation[name]]
+    if limits_hit or truncation["skipped_large_files"]:
+        summary_lines.append(
+            f"- NOTE: partial graph (limits hit: {', '.join(limits_hit) or 'none'}; "
+            f"{truncation['skipped_large_files']} files over 1 MiB not parsed)."
+        )
 
     adjacency_lines = ["", "FULL FILE LIST:"]
     adjacency_lines.extend(f"- {node}" for node in sorted(graph.nodes()))
@@ -312,6 +356,15 @@ def get_project_code_graph(repo_root: str | Path = ".") -> dict:
             "top_inbound": in_degrees[:8],
             "top_outbound": out_degrees[:8],
             "isolated": isolated[:20],
+            "truncation": {
+                **truncation,
+                "limits": {
+                    "max_files": MAX_GRAPH_FILES,
+                    "max_file_bytes": MAX_GRAPH_FILE_BYTES,
+                    "max_input_bytes": MAX_GRAPH_INPUT_BYTES,
+                    "max_edges": MAX_GRAPH_EDGES,
+                },
+            },
         },
         "summary": review_prompt,
         "review_input": review_prompt,
