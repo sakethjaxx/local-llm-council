@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Security and resource hardening
+- Authentication, a 52 MiB request-body cap (413) and atomic run admission (429) now happen before any request body is parsed.
+- Python tool calls are re-authorized at execution time; the Docker sandbox is uniquely named, offline, capability-free, deadline- and output-bounded, and always removed.
+- Secrets are redacted across streamed output (even when split across chunks), chat, errors, logs, feedback, metrics, memory, skills, replays and exports; numeric token-usage fields are preserved.
+- A self-hosted Content-Security-Policy, and model Markdown can no longer load remote images.
+- PDF extraction runs in a disposable child process with a deadline, page cap and memory ceiling; code-graph processing is bounded and reports truncation.
+- Configuration is loaded from the environment, `COUNCIL_ENV_FILE`, or the checkout's `.env` only, never from the working directory (LiteLLM's own `.env` loading is disabled too).
+
+### Reliability
+- The chairman verdict and member results now reach the web UI and CLI (`council ask`, `check_diff`) in real runs.
+- Client disconnects cancel the run's model calls; shutdown drains, then cancels, background work; stale `running` runs become `interrupted` on startup.
+- Memory embedding, model lookups and other blocking work no longer stall the event loop; Ollama is reached on `127.0.0.1` (model lookups ~2.8 s → 0.02 s).
+- One 300 s `COUNCIL_LLM_TIMEOUT` default everywhere.
+
+### Usability and accessibility
+- CPU-only machines get a small shared-model roster; `council ask/review/check_diff` accept `--model` and `--preset`.
+- Every control is keyboard-operable; badge contrast fixed; Reset and Clear keys ask for confirmation.
+
 ### Hardware-fit roster (local-first usability)
 - The hardware suggester is now **memory-footprint aware**: it sizes the council to a concurrent memory budget (`RAM − reserve`, padded for KV cache) instead of a naive RAM tier. Real model diversity is only proposed when ≥2 strong (7B-class) models fit at once; otherwise a single best-fit model is shared across every seat so it stays resident. This stops the default 3-distinct-model roster from thrashing and timing out on 16GB machines.
 - The suggester now only proposes models that are actually installed locally (probed and briefly cached), and lists `ollama pull` commands for any gaps. `/hardware/suggest` returns `strategy`, `budget_gb`, and a human `reason`.

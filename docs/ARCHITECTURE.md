@@ -99,6 +99,40 @@ User submits topic + files
               metrics_store.record()
 ```
 
+## Request Boundary and Run Lifecycle
+
+```
+client ──► BrowserBoundaryMiddleware (http_security.py)           no body read yet
+             host/peer check → origin check → API key → Content-Length ≤ 52 MiB
+             run endpoints: atomic slot reservation (429 if none)   ─┐
+             body bytes counted while FastAPI reads them (413)       │ slot held
+           ► FastAPI route (main.py): validate shapes, build stream    │
+           ► routes_stream.py: per-member StreamScrubber, aclosing()   │
+           ► orchestrator.run(): phases, member tasks, finalize_run    │
+           ◄ stream ends / client disconnects / error ────────────────┘ slot released
+```
+
+Ownership:
+
+| Concern | Owner |
+|---|---|
+| Admission, auth, body limits, security headers | `http_security.BrowserBoundaryMiddleware` |
+| Run slots, shutdown flag, background-task registry | `shutdown_state` |
+| Phase sequencing, member tasks and their cancellation | `orchestrator.run` |
+| Provider calls, timeouts (`COUNCIL_LLM_TIMEOUT`), bounded retries, tool authorization | `llm_stream` |
+| Secret redaction of anything leaving the process | `provider_caps` (`redact_config`, `StreamScrubber`), applied in `routes_stream`, the stores and the log formatters |
+| Persistence | `run_store`, `memory_store`, `skill_registry`, `metrics_store` (each opens its own WAL connections) |
+| Untrusted-content isolation | `pdf_worker` (child process), `tool_repl` (Docker), `project_graph` (bounded) |
+| Configuration loading | `council_env` (process env > `COUNCIL_ENV_FILE` > checkout `.env`) |
+
+Lifecycle guarantees:
+
+- A client disconnect closes the stream generator (`aclosing`), which cancels the run's member tasks and waits for them (bounded) before the run is marked `cancelled`.
+- Post-run work (memory and skill extraction) and startup maintenance run as tracked background tasks.
+- Shutdown sets the shutdown flag, waits up to 15 s for active runs, then up to 10 s for background work, and cancels whatever remains.
+- Startup marks runs left `running` by a crashed process as `interrupted`.
+- Blocking work (SQLite, embeddings, graph building, hardware probes, subprocesses) runs in worker threads, so `/health` stays responsive during expensive requests.
+
 ## Component Responsibilities (Current vs Planned)
 
 > **Current** = ships in main branch today. **Planned** = Phase 1.5 or Phase 2 work.

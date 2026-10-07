@@ -100,6 +100,10 @@ Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-ph
 | `COUNCIL_HOST` | `127.0.0.1` | Server bind host |
 | `COUNCIL_PORT` | `8765` | Server port |
 | `COUNCIL_API_KEY` | empty | Required on non-localhost binds; protects endpoints when set |
+| `COUNCIL_ENV_FILE` | unset | `.env` file to load instead of the checkout's `.env` (the working directory is never searched) |
+| `COUNCIL_MAX_CONCURRENT_RUNS` | `4` | Runs admitted at once; extra runs get 429 before their body is read |
+| `COUNCIL_PDF_ALLOW_UNLIMITED_MEMORY` | `false` | Allow PDF parsing where the memory ceiling can't be enforced (macOS) |
+| `OLLAMA_API_BASE` | `http://127.0.0.1:11434` | Ollama URL (also read by LiteLLM) |
 | `COUNCIL_CORS_ORIGINS` | localhost allowlist | Comma-separated allowed origins; `*` is opt-in |
 | `COUNCIL_PROJECT_ROOT` | unset | Confines local project paths to this directory tree |
 | `COUNCIL_ALLOW_URL_FETCH` | `false` | Permit remote URL extraction from submitted text |

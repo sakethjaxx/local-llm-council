@@ -174,23 +174,35 @@ Commit accepted.
 | :--- | :---: | :--- |
 | `COUNCIL_HOST` | `127.0.0.1` | Server host binding. Local-only by default. |
 | `COUNCIL_PORT` | `8765` | FastAPI server port. |
-| `COUNCIL_API_KEY` | `""` | Optional API key required when binding to `0.0.0.0` or VPS. |
+| `COUNCIL_API_KEY` | `""` | API key checked on every request except the UI shell; required to bind anything but localhost. See [SECURITY.md](SECURITY.md). |
+| `COUNCIL_ENV_FILE` | unset | Load this `.env` file instead of the checkout's `.env`. |
+| `COUNCIL_MAX_CONCURRENT_RUNS` | `4` | Council/chat runs allowed at once; further runs get HTTP 429. |
 | `COUNCIL_GPU_VRAM_GB` | auto-detected | GPU memory for roster sizing; set it when your GPU isn't detected (AMD/Intel), `0` forces CPU mode. |
 | `COUNCIL_MAX_PARALLEL_MEMBERS` | `2` | Max concurrent Ollama inference calls to prevent VRAM thrashing. |
 | `COUNCIL_LLM_TIMEOUT` | `300` | Hard wall-clock timeout in seconds for slow local hardware. |
 | `COUNCIL_ENABLE_WEB_SEARCH` | `false` | Enable DuckDuckGo web search to fact-check council disputes. |
-| `COUNCIL_MAX_UPLOAD_MB` | `20` | Maximum file attachment size in MB. |
+| `COUNCIL_MAX_UPLOAD_MB` | `20` | Maximum file attachment size in MB (whole requests are capped at 52 MiB). |
+| `COUNCIL_ENABLE_PYTHON_TOOL` | `false` | Let tool-capable models run Python in a disposable Docker sandbox (`docker pull python:3.11-slim` once). |
+| `COUNCIL_PDF_ALLOW_UNLIMITED_MEMORY` | `false` | Allow PDF parsing where the parser's memory ceiling cannot be enforced (macOS). |
+| `OLLAMA_API_BASE` | `http://127.0.0.1:11434` | Ollama daemon URL (also read by LiteLLM). |
 
 *(Optional cloud API keys for OpenAI, Anthropic, Gemini, or Groq can be configured in `.env` or directly in the Web UI via headers).*
+
+**Where settings come from**, highest priority first: variables already set in the environment, then the file named by `COUNCIL_ENV_FILE`, then the `.env` in this checkout. A `.env` in the directory you start the server or CLI from is never read.
 
 ---
 
 ## 🧪 Testing & Evaluation
 
-### Run Test Suite (165 Tests)
+### Run the test suites
 ```bash
-pytest tests/ -v
+pytest tests/ -q --ignore=tests/eval          # backend; hermetic, no Ollama or Docker needed
+node --test tests/frontend.test.cjs           # frontend logic
+COUNCIL_TEST_DOCKER=1 pytest tests/test_tool_repl.py -k Live   # real sandbox container (needs Docker)
 ```
+
+Browser checks (synthetic inference, 1440/768/390/320 px, axe accessibility, keyboard, CSP) and the
+live user-acceptance suite (real Ollama, installed wheel) are described in [.ai/TESTING.md](.ai/TESTING.md).
 
 ### Run Multi-Criteria Evaluation Benchmark
 ```bash
