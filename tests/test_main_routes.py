@@ -370,17 +370,6 @@ class MainRoutesTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(ingest.call_args.args[1], 200)
 
-    def test_reject_if_overloaded_returns_429(self):
-        from fastapi import HTTPException
-
-        with patch.object(main, "active_stream_count", return_value=main.MAX_CONCURRENT_STREAMS):
-            with self.assertRaises(HTTPException) as ctx:
-                main._reject_if_overloaded()
-            self.assertEqual(ctx.exception.status_code, 429)
-
-        with patch.object(main, "active_stream_count", return_value=0):
-            main._reject_if_overloaded()
-
 
 if __name__ == "__main__":
     unittest.main()

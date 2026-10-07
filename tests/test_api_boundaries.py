@@ -40,6 +40,14 @@ local = client.options('/health', headers={{
     'Origin': 'http://localhost:8765', 'Access-Control-Request-Method': 'GET',
 }})
 assert local.headers.get('access-control-allow-origin') == 'http://localhost:8765', local.headers
+unauth = client.post('/council/stream', data={{'topic_text': 'x'}}, files={{'attachments': ('a.txt', b'x' * 4096)}})
+assert unauth.status_code == 403, unauth.text
+def chunks():
+    for _ in range(53):
+        yield b'x' * (1024 * 1024)
+too_big = client.post('/council/stream', headers={{'X-API-Key': 'test-key', 'Content-Type': 'multipart/form-data; boundary=b'}},
+                      content=chunks())
+assert too_big.status_code == 413, (too_big.status_code, too_big.text)
 # Entering/exiting the client runs the lifespan; shutdown used to raise TypeError.
 with TestClient(main.app) as lifespan_client:
     assert lifespan_client.get('/health', headers={{'X-API-Key': 'test-key'}}).status_code == 200

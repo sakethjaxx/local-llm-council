@@ -1,10 +1,9 @@
 import threading
 import time
-from contextlib import contextmanager
 
 
 _shutdown_requested = threading.Event()
-_active_streams = 0
+_active_runs = 0
 _lock = threading.Lock()
 
 
@@ -20,21 +19,25 @@ def is_shutdown_requested() -> bool:
     return _shutdown_requested.is_set()
 
 
-@contextmanager
-def track_active_stream():
-    global _active_streams
+def try_reserve_run_slot(limit: int) -> bool:
+    """Atomically claim a run slot; the caller must release_run_slot() on every exit path."""
+    global _active_runs
     with _lock:
-        _active_streams += 1
-    try:
-        yield
-    finally:
-        with _lock:
-            _active_streams = max(0, _active_streams - 1)
+        if _active_runs >= limit:
+            return False
+        _active_runs += 1
+        return True
+
+
+def release_run_slot() -> None:
+    global _active_runs
+    with _lock:
+        _active_runs = max(0, _active_runs - 1)
 
 
 def active_stream_count() -> int:
     with _lock:
-        return _active_streams
+        return _active_runs
 
 
 def wait_for_active_streams(timeout_s: float = 10.0, poll_interval_s: float = 0.1) -> int:

@@ -40,7 +40,6 @@ from main_routes_helper import (
     _parse_uploads,
     _pick_top_files,
     _read_files_as_attachments,
-    _reject_if_overloaded,
     _render_run_markdown,
     _request_cloud_keys,
     _shutdown_event_payload,
@@ -72,11 +71,9 @@ from schemas import (
     ReviewProjectRequest,
 )
 from shutdown_state import (
-    active_stream_count,
     clear_shutdown_request,
     is_shutdown_requested,
     request_shutdown,
-    track_active_stream,
     wait_for_active_streams,
 )
 from skill_registry import skill_registry
@@ -92,15 +89,6 @@ _OLLAMA_TAG_WHITELIST = {
 
 def _is_localhost(host: str) -> bool:
     return host.strip().lower() in {"127.0.0.1", "localhost"}
-
-
-def verify_api_key(request: Request, x_api_key: str = Header(None)) -> None:
-    # Only the static shell is public, so a browser can enter the server key.
-    if request.method == "GET" and request.url.path == "/":
-        return
-    expected = os.getenv("COUNCIL_API_KEY", "").strip()
-    if expected and not hmac.compare_digest((x_api_key or "").encode(), expected.encode()):
-        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def require_api_key(x_api_key: str = Header(None)) -> None:
@@ -151,9 +139,11 @@ async def lifespan(app: FastAPI):
         logger.warning("shutdown_timed_out", extra={"active_streams": remaining})
 
 
-app = FastAPI(title="Local LLM Council", lifespan=lifespan, dependencies=[Depends(verify_api_key)])
+# Authentication, body limits and run admission happen in BrowserBoundaryMiddleware,
+# before FastAPI parses any request body.
+app = FastAPI(title="Local LLM Council", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=_allowed_origins(), allow_methods=["*"], allow_headers=["*"])
-app.add_middleware(BrowserBoundaryMiddleware, allowed_origins=_allowed_origins())
+app.add_middleware(BrowserBoundaryMiddleware, allowed_origins=_allowed_origins(), max_runs=MAX_CONCURRENT_STREAMS)
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 app.mount("/demo-samples", StaticFiles(directory=APP_DIR / "demo_samples"), name="demo-samples")
 
@@ -195,7 +185,6 @@ async def council_stream(
     deep_debate: bool = Form(False),
     attachments: Optional[list[UploadFile]] = File(None),
 ):
-    _reject_if_overloaded()
     if len(topic_text) > 200_000:
         raise HTTPException(status_code=422, detail="Topic exceeds the 200,000 character limit.")
     if not topic_text.strip() and not attachments:
@@ -215,7 +204,6 @@ async def council_stream(
 
 @app.post("/council/chat")
 async def council_chat(req: ChatRequest, request: Request):
-    _reject_if_overloaded()
     validate_council_config(req.council_config)
     keys = _request_cloud_keys(request)
     budget = normalize_token_budget_profile(req.token_budget_profile)
@@ -284,7 +272,6 @@ async def export_memory_graph(project_name: str = "local-llm-council"):
 @app.post("/council/review-project")
 async def review_project(req: ReviewProjectRequest, request: Request):
     validate_council_config(req.council_config)
-    _reject_if_overloaded()
     root = _confine_to_project_root(req.path)
     if not os.path.isdir(root):
         raise HTTPException(status_code=400, detail=f"Not a directory: {root}")

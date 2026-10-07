@@ -27,7 +27,6 @@ from routes_stream import (
     stream_council_lifecycle,
     stream_review_project_lifecycle,
 )
-from shutdown_state import active_stream_count
 
 logger = get_logger(__name__)
 
@@ -75,16 +74,6 @@ def _int_env(name: str, default: int) -> int:
         return max(1, int(os.getenv(name, str(default))))
     except (TypeError, ValueError):
         return default
-
-
-def _reject_if_overloaded():
-    max_active = _main_attr("MAX_CONCURRENT_STREAMS", 4)
-    fn_count = _main_attr("active_stream_count", active_stream_count)
-    if fn_count() >= max_active:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Server is at maximum capacity ({max_active} active runs). Please wait for an existing run to finish.",
-        )
 
 
 def _request_cloud_keys(request: Request) -> dict:
