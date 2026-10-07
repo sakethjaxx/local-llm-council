@@ -1,4 +1,5 @@
 import asyncio
+import io
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,12 @@ import cli
 
 
 class CLITests(unittest.TestCase):
+    def setUp(self):
+        # CI has no Ollama daemon; tests that care about preflight patch it themselves.
+        patcher = patch("cli.ensure_models_for_config", return_value={"ready": True, "missing": []})
+        self.ensure_models = patcher.start()
+        self.addCleanup(patcher.stop)
+
     @patch("cli.sys.argv", ["cli.py", "check_diff"])
     @patch("cli.subprocess.run")
     @patch("cli.get_hardware_suggestion")
@@ -192,6 +199,40 @@ class CLITests(unittest.TestCase):
         with patch("cli.sys.exit") as mock_exit:
             asyncio.run(cli.main())
         mock_exit.assert_called_once_with(1)
+
+    def test_cli_model_flag_puts_every_seat_on_that_model(self):
+        args = self._run_with_signature_check(["cli.py", "ask", "Is WAL safe?", "--model", "qwen2.5:3b"])
+        self.assertEqual({seat["model"] for seat in args["custom_config"].values()}, {"ollama/qwen2.5:3b"})
+        self.assertIn("chairman", args["custom_config"])
+
+    def test_cli_preset_flag_uses_the_preset_roster(self):
+        from demo_catalog import load_presets
+
+        feather = next(p for p in load_presets()["presets"] if p["id"] == "feather")
+        args = self._run_with_signature_check(["cli.py", "ask", "Is WAL safe?", "--preset", "feather"])
+        self.assertEqual(args["custom_config"], feather["config"])
+        args = self._run_with_signature_check(["cli.py", "ask", "x", "--preset", "feather", "--model", "gemma2:2b"])
+        self.assertEqual({seat["model"] for seat in args["custom_config"].values()}, {"ollama/gemma2:2b"})
+        self.assertEqual(feather["config"]["chairman"]["model"], "ollama/qwen2.5:3b")  # preset not mutated
+
+    @patch("cli.CouncilOrchestrator")
+    def test_cli_unknown_preset_exits_2(self, mock_orch_class):
+        with patch("cli.sys.argv", ["cli.py", "ask", "x", "--preset", "nope"]),                 patch("cli.sys.exit", side_effect=SystemExit) as mock_exit:
+            with self.assertRaises(SystemExit):
+                asyncio.run(cli.main())
+        mock_exit.assert_called_once_with(2)
+        mock_orch_class.assert_not_called()
+
+    @patch("cli.CouncilOrchestrator")
+    def test_cli_missing_model_stops_before_running_and_says_how_to_pull(self, mock_orch_class):
+        self.ensure_models.return_value = {"ready": False, "missing": ["qwen2.5:3b"]}
+        stderr = io.StringIO()
+        with patch("cli.sys.argv", ["cli.py", "ask", "x", "--model", "qwen2.5:3b"]),                 patch("cli.sys.exit", side_effect=SystemExit) as mock_exit, patch("cli.sys.stderr", stderr):
+            with self.assertRaises(SystemExit):
+                asyncio.run(cli.main())
+        mock_exit.assert_called_once_with(1)
+        mock_orch_class.assert_not_called()
+        self.assertIn("ollama pull qwen2.5:3b", stderr.getvalue())
 
 
 if __name__ == "__main__":

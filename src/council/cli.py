@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 
 from blast_radius import calculate_blast_radius
+from demo_catalog import load_presets
 from hardware_detect import get_hardware_suggestion
 from logging_utils import get_logger
+from ollama_manager import auto_pull_enabled, ensure_models_for_config
 from orchestrator import CouncilOrchestrator, parse_chairman_response
 from project_graph import get_project_code_graph
 from run_store import RunStore
@@ -78,7 +80,35 @@ def _print_verdict(data: dict) -> None:
                 print(f"  - {item}")
 
 
-async def _run_check_diff():
+def _resolve_roster(model: str | None = None, preset: str | None = None) -> dict:
+    """Roster from a preset (or the hardware suggestion), optionally with every seat on one model."""
+    if preset:
+        presets = {p["id"]: p for p in load_presets()["presets"]}
+        if preset not in presets:
+            print(f"Unknown preset '{preset}'. Choose one of: {', '.join(presets)}", file=sys.stderr)
+            sys.exit(2)
+        config = presets[preset]["config"]
+    else:
+        config = get_hardware_suggestion()["config"]
+    config = json.loads(json.dumps(config))  # deep copy; never mutate shared presets
+    if model:
+        model = model if "/" in model else f"ollama/{model}"
+        for seat in config.values():
+            seat["model"] = model
+    return config
+
+
+def _require_models(config: dict) -> None:
+    status = ensure_models_for_config(config, auto_pull=auto_pull_enabled())
+    if not status["ready"]:
+        missing = status["missing"]
+        print(f"Missing Ollama models: {', '.join(missing)}", file=sys.stderr)
+        for tag in missing:
+            print(f"  ollama pull {tag}", file=sys.stderr)
+        sys.exit(1)
+
+
+async def _run_check_diff(model: str | None = None, preset: str | None = None):
     result = subprocess.run(["git", "diff", "--cached"], capture_output=True, text=True)
     diff = result.stdout
     if not diff.strip():
@@ -92,11 +122,11 @@ async def _run_check_diff():
 
     blast_radius = calculate_blast_radius(changed_files)
     full_topic = blast_radius + "\n\n--- GIT DIFF ---\n" + diff
-    hardware_config = get_hardware_suggestion()["config"]
-    config = {
-        "security": hardware_config.get("security", {}),
-        "chairman": hardware_config.get("chairman", {}),
-    }
+    roster = _resolve_roster(model, preset)
+    # A pre-commit hook must stay quick: one reviewer plus the chairman.
+    reviewer = roster.get("security") or next(seat for seat_id, seat in roster.items() if seat_id != "chairman")
+    config = {"security": reviewer, "chairman": roster["chairman"]}
+    _require_models(config)
 
     data = await _collect_verdict(CouncilOrchestrator().run(
         topic_text=full_topic,
@@ -121,10 +151,15 @@ async def _run_ask(
     fast_mode: bool = False,
     output_json: bool = False,
     attachments: list[dict] | None = None,
+    model: str | None = None,
+    preset: str | None = None,
 ):
+    config = _resolve_roster(model, preset)
+    _require_models(config)
     data = await _collect_verdict(CouncilOrchestrator().run(
         topic_text=topic,
         attachments=attachments,
+        custom_config=config,
         deep_debate=deep_debate,
         token_budget_profile="economy" if fast_mode else None,
     ))
@@ -135,7 +170,7 @@ async def _run_ask(
     sys.exit(1 if data.get("_parse_tier") == "parse_failed" else 0)
 
 
-async def _run_review(path: str, deep_debate: bool = False, output_json: bool = False):
+async def _run_review(path: str, deep_debate: bool = False, output_json: bool = False, **roster):
     target = Path(path).resolve()
     if not target.exists():
         print(f"Error: Path '{path}' does not exist.", file=sys.stderr)
@@ -161,7 +196,7 @@ async def _run_review(path: str, deep_debate: bool = False, output_json: bool = 
         _status(f"council: reviewing {len(attachments)} of {code_graph['stats']['files']} files in {target.name}")
         topic = code_graph.get("review_input") or f"Architectural review of project directory `{target.name}`."
 
-    await _run_ask(topic, deep_debate=deep_debate, output_json=output_json, attachments=attachments)
+    await _run_ask(topic, deep_debate=deep_debate, output_json=output_json, attachments=attachments, **roster)
 
 
 def _show_history(limit: int = 10):
@@ -186,6 +221,8 @@ def _show_history(limit: int = 10):
 def _show_models():
     hw = get_hardware_suggestion()
     print(f"\nDetected hardware: {hw.get('ram_gb', '?')} GB RAM (model memory budget ~{hw.get('budget_gb', '?')} GB)")
+    gpu = f"GPU with {hw['vram_gb']} GB" if hw.get("vram_gb") else "no GPU detected"
+    print(f"Inference: {hw.get('compute', '?').upper()} ({gpu})")
     print(f"Roster strategy: {hw.get('strategy', 'shared')}")
     if hw.get("reason"):
         print(f"  {hw['reason']}")
@@ -209,8 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
+    def add_roster_options(sub):
+        sub.add_argument("--model", help="Run every seat on this model, e.g. qwen2.5:3b (overrides the roster)")
+        sub.add_argument("--preset", help="Use a preset roster, e.g. fast, feather, security_audit, code")
+
     # check_diff
-    subparsers.add_parser("check_diff", help="Review staged git changes (exit 1 blocks the commit)")
+    diff_p = subparsers.add_parser("check_diff", help="Review staged git changes (exit 1 blocks the commit)")
+    add_roster_options(diff_p)
 
     # ask
     ask_p = subparsers.add_parser("ask", help="Ask a question or request council deliberation")
@@ -218,12 +260,14 @@ def build_parser() -> argparse.ArgumentParser:
     ask_p.add_argument("--deep-debate", action="store_true", help="Enable the Phase 2 peer cross-review")
     ask_p.add_argument("--fast-mode", action="store_true", help="Use the economy token budget for shorter, faster answers")
     ask_p.add_argument("--json", action="store_true", help="Output chairman verdict as JSON")
+    add_roster_options(ask_p)
 
     # review
     rev_p = subparsers.add_parser("review", help="Review a file or project directory")
     rev_p.add_argument("path", type=str, help="Path to file or directory")
     rev_p.add_argument("--deep-debate", action="store_true", help="Enable the Phase 2 peer cross-review")
     rev_p.add_argument("--json", action="store_true", help="Output chairman verdict as JSON")
+    add_roster_options(rev_p)
 
     # history
     hist_p = subparsers.add_parser("history", help="List recent council runs")
@@ -239,12 +283,13 @@ async def main():
     parser = build_parser()
     args = parser.parse_args(sys.argv[1:] if len(sys.argv) > 1 else ["--help"])
 
+    roster = {"model": getattr(args, "model", None), "preset": getattr(args, "preset", None)}
     if args.command == "check_diff":
-        await _run_check_diff()
+        await _run_check_diff(**roster)
     elif args.command == "ask":
-        await _run_ask(args.topic, deep_debate=args.deep_debate, fast_mode=args.fast_mode, output_json=args.json)
+        await _run_ask(args.topic, deep_debate=args.deep_debate, fast_mode=args.fast_mode, output_json=args.json, **roster)
     elif args.command == "review":
-        await _run_review(args.path, deep_debate=args.deep_debate, output_json=args.json)
+        await _run_review(args.path, deep_debate=args.deep_debate, output_json=args.json, **roster)
     elif args.command == "history":
         _show_history(limit=args.limit)
     elif args.command == "models":

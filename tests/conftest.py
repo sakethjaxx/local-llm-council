@@ -9,6 +9,8 @@ os.environ.setdefault(
     os.path.join(tempfile.mkdtemp(prefix="council-test-"), "test_runs.db"),
 )
 os.environ.setdefault("COUNCIL_METRICS_FILE", "")
+# Roster suggestions depend on GPU memory; pin it so results don't vary by host.
+os.environ.setdefault("COUNCIL_GPU_VRAM_GB", "24")
 
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))

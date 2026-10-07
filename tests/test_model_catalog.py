@@ -87,5 +87,46 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertLess(hardware_detect._get_model_gb(suggestion["config"][seat_id]["model"]), hardware_detect._STRONG_GB)
 
 
+class ComputeAwareRosterTests(unittest.TestCase):
+    INSTALLED = ["ollama/qwen2.5:7b", "ollama/llama3.1:8b", "ollama/qwen2.5:3b", "ollama/gemma2:2b"]
+
+    def _suggest(self, vram_gb, installed=INSTALLED, strategy="auto"):
+        with patch("hardware_detect._gpu_vram_gb", return_value=vram_gb), patch("psutil.virtual_memory") as mem:
+            mem.return_value.total = 24 * (1024 ** 3)
+            return hardware_detect.get_hardware_suggestion(installed, strategy=strategy)
+
+    def test_cpu_only_auto_shares_one_small_model_across_all_seats(self):
+        suggestion = self._suggest(None)
+        self.assertEqual(suggestion["compute"], "cpu")
+        self.assertEqual({seat["model"] for seat in suggestion["config"].values()}, {"ollama/qwen2.5:3b"})
+        self.assertIn("CPU", suggestion["reason"])
+
+    def test_gpu_too_small_for_7b_counts_as_cpu(self):
+        self.assertEqual(self._suggest(2.0)["compute"], "cpu")
+
+    def test_capable_gpu_keeps_the_diverse_7b_roster(self):
+        suggestion = self._suggest(12.0)
+        self.assertEqual(suggestion["compute"], "gpu")
+        self.assertEqual(suggestion["strategy"], "diverse")
+        self.assertIn("ollama/qwen2.5:7b", {seat["model"] for seat in suggestion["config"].values()})
+
+    def test_explicit_strategy_is_honored_on_cpu(self):
+        self.assertEqual(self._suggest(None, strategy="diverse")["strategy"], "diverse")
+
+    def test_cpu_only_without_small_models_suggests_pulling_one(self):
+        suggestion = self._suggest(None, installed=["ollama/qwen2.5:7b"])
+        self.assertEqual(suggestion["config"]["chairman"]["model"], "ollama/qwen2.5:7b")
+        self.assertIn("ollama pull qwen2.5:3b", suggestion["reason"])
+
+    def test_vram_override_env(self):
+        for value, expected in (("0", None), ("8", 8.0), ("junk", "probe")):
+            hardware_detect._gpu_vram_gb.cache_clear()
+            with patch.dict("os.environ", {"COUNCIL_GPU_VRAM_GB": value}), \
+                    patch("hardware_detect.shutil.which", return_value=None), \
+                    patch("hardware_detect.sys.platform", "linux"):
+                self.assertEqual(hardware_detect._gpu_vram_gb(), None if expected == "probe" else expected)
+        hardware_detect._gpu_vram_gb.cache_clear()
+
+
 if __name__ == "__main__":
     unittest.main()

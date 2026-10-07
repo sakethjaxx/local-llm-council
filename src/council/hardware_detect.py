@@ -22,7 +22,13 @@ synthesis. It favors final-answer quality on constrained hardware, at the cost
 of one model reload between phases.
 """
 
+import os
+import platform
+import shutil
+import subprocess
+import sys
 import time
+from functools import lru_cache
 
 import psutil
 
@@ -122,6 +128,42 @@ def _reserve_gb(total_ram_gb: float) -> float:
 
 def _fits(weights_gb: float, budget_gb: float) -> bool:
     return _EFF * weights_gb <= budget_gb
+
+
+@lru_cache(maxsize=1)
+def _gpu_vram_gb() -> float | None:
+    """Best-effort GPU memory Ollama can use; None means inference runs on the CPU.
+
+    COUNCIL_GPU_VRAM_GB overrides detection (0 forces CPU mode) for GPUs this
+    cannot see, such as AMD/ROCm or Intel.
+    """
+    override = os.getenv("COUNCIL_GPU_VRAM_GB", "").strip()
+    if override:
+        try:
+            value = float(override)
+            return value if value > 0 else None
+        except ValueError:
+            pass
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return psutil.virtual_memory().total / (1024 ** 3)  # unified memory, Metal
+    smi = shutil.which("nvidia-smi")
+    if smi:
+        try:
+            out = subprocess.run(
+                [smi, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5, check=True,
+            ).stdout
+            mib = [float(v) for v in out.split()]
+            if mib:
+                return max(mib) / 1024
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    return None
+
+
+def _cpu_bound(vram_gb: float | None) -> bool:
+    """True when no GPU can hold a 7B-class model, so it would run on the CPU."""
+    return vram_gb is None or vram_gb < _STRONG_GB
 
 
 _PERSONAS = {
@@ -269,6 +311,7 @@ def _pick_roster(
     total_ram_gb: float,
     installed: list[str] | None,
     requested_strategy: str = "auto",
+    cpu_only: bool = False,
 ) -> dict:
     """Choose the best-fitting roster for the concurrent memory budget."""
     reserve = _reserve_gb(total_ram_gb)
@@ -284,6 +327,17 @@ def _pick_roster(
 
     strategy = "shared"
     seats, chairman, roster_models, reason = None, None, None, None
+
+    # On CPU a 7B model manages only a few tokens/s, so a council run takes the
+    # better part of an hour. Auto keeps one small model loaded for every seat.
+    small = [m for m in pool if _get_model_gb(m) < _STRONG_GB]
+    if requested_strategy == "auto" and cpu_only and small:
+        seats, chairman, roster_models, _ = _pick_shared_roster(small, budget)
+        reason = (
+            f"No GPU that can hold a 7B model was found, so models run on the CPU. "
+            f"All seats share {chairman.split('/')[-1]}, a small model that stays loaded "
+            f"for runs of minutes, not an hour. Set COUNCIL_GPU_VRAM_GB if a GPU was missed."
+        )
 
     if requested_strategy == "mixed":
         mixed = _pick_mixed_roster(pool, budget)
@@ -307,6 +361,9 @@ def _pick_roster(
     if seats is None:
         seats, chairman, roster_models, reason = _pick_shared_roster(pool, budget)
         strategy = "shared"
+
+    if cpu_only and not small:
+        reason += " No GPU was found and no small model is installed: `ollama pull qwen2.5:3b` makes runs much faster."
 
     config = _build_config(seats[0], seats[1], seats[2], chairman)
     to_pull = [m for m in roster_models if m not in inst]
@@ -345,9 +402,13 @@ def get_hardware_suggestion(
     else:
         installed = [_normalize(m) for m in installed_models]
 
-    picked = _pick_roster(total_ram_gb, installed, strategy)
+    vram_gb = _gpu_vram_gb()
+    cpu_only = _cpu_bound(vram_gb)
+    picked = _pick_roster(total_ram_gb, installed, strategy, cpu_only=cpu_only)
     return {
         "ram_gb": round(total_ram_gb, 1),
+        "vram_gb": round(vram_gb, 1) if vram_gb else None,
+        "compute": "cpu" if cpu_only else "gpu",
         "tier_name": picked["tier_name"],
         "strategy": picked["strategy"],
         "budget_gb": picked["budget_gb"],

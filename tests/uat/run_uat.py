@@ -10,8 +10,7 @@ The server runs from a temp directory, so package data must come from the wheel.
 
 Run it with the UAT venv's Python: scripts are found next to that interpreter.
 
-Needs a running Ollama with --model pulled. Add --slow for the CLI `ask`
-journey on the default (hardware-suggested) roster, and --browser to also run
+Needs a running Ollama with --model pulled. Add --browser to also run
 tests/uat/browser_uat.cjs (needs `npm ci` in tools/frontend + Playwright Chromium).
 Exit code 1 if any scenario fails.
 """
@@ -133,7 +132,9 @@ def u02(c):
     out = run_cli(["models"])
     check(out.returncode == 0, f"rc={out.returncode} {out.stderr[-300:]}")
     check("Suggested roster" in out.stdout and "ollama/" in out.stdout, out.stdout[-400:])
-    log(out.stdout.strip().splitlines()[1] if out.stdout.strip() else "")
+    check("Inference: CPU" in out.stdout or "Inference: GPU" in out.stdout, "no CPU/GPU line")
+    for line in out.stdout.strip().splitlines()[:3]:
+        log(line)
 
 
 @scenario("U03", "Server started from the installed package serves the UI and all assets offline")
@@ -356,14 +357,33 @@ def b01(c):
     check(proc.returncode == 0, "browser journey failed")
 
 
-@scenario("S01", "`council ask --json --fast-mode` answers on the default hardware roster", tag="slow")
-def s01(c):
+@scenario("U19", "`council ask --json --fast-mode` answers on the default hardware roster", tag="llm")
+def u19(c):
+    started = time.monotonic()
     out = run_cli(["ask", "Is SQLite WAL mode safe for a single-user desktop app? Answer briefly.", "--json", "--fast-mode"],
                   timeout=3600)
     check(out.returncode == 0, f"rc={out.returncode} stderr={out.stderr[-600:]}")
     data = json.loads(out.stdout)
-    check(data.get("verdict"), f"no verdict: {out.stdout[:300]}")
-    log(f"verdict={data.get('verdict')!r} risk={data.get('risk_score')}")
+    check(data.get("verdict") and data.get("verdict") != "parse_failed", f"no verdict: {out.stdout[:300]}")
+    log(f"{time.monotonic() - started:.0f}s verdict={str(data.get('verdict'))[:80]!r} risk={data.get('risk_score')}")
+
+
+@scenario("U20", "`council check_diff --model` reviews a staged change like a pre-commit hook", tag="llm")
+def u20(c):
+    repo = CTX["workdir"] / "hook-repo"
+    shutil.copytree(CTX["project"], repo, ignore=shutil.ignore_patterns(".env", "*.env"))
+    git = ["git", "-c", "user.email=uat@example.invalid", "-c", "user.name=UAT"]
+    for cmd in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "base"]):
+        subprocess.run(git + cmd, cwd=repo, check=True, capture_output=True)
+    (repo / "store.py").write_text("import os\n\n\ndef save(record):\n    os.system('echo ' + record['name'])\n",
+                                   encoding="utf-8")
+    subprocess.run(git + ["add", "store.py"], cwd=repo, check=True, capture_output=True)
+    out = subprocess.run([CTX["council"], "check_diff", "--model", CTX["model"]], cwd=repo, env=CTX["env"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600)
+    check(out.returncode in (0, 1), f"rc={out.returncode} {out.stderr[-600:]}")
+    verdict_line = next((line for line in out.stdout.splitlines() if line.startswith("Verdict:")), "")
+    check(verdict_line and "parse_failed" not in verdict_line and verdict_line != "Verdict: ", f"stdout: {out.stdout[-500:]}")
+    log(f"{verdict_line[:100]} -> commit {'blocked' if out.returncode else 'allowed'}")
 
 
 @scenario("Z01", "Server log has no unhandled tracebacks")
@@ -420,7 +440,6 @@ def main():
     ap.add_argument("--only", default="", help="comma-separated scenario ids (fast scenarios always run)")
     ap.add_argument("--no-llm", action="store_true", help="skip real-model scenarios")
     ap.add_argument("--browser", action="store_true", help="run the real-model browser journey (B01)")
-    ap.add_argument("--slow", action="store_true", help="run S01 on the default roster (can take an hour on CPU)")
     ap.add_argument("--out", default=str(REPO / ".audit-tmp" / "uat"), help="report, server log and screenshots")
     args = ap.parse_args()
 
@@ -448,7 +467,7 @@ def main():
         "COUNCIL_MEMORY_MODEL": args.model,
     }
     only = {s.strip() for s in args.only.split(",") if s.strip()}
-    enabled = {"fast"} | (set() if args.no_llm else {"llm"}) | ({"browser"} if args.browser else set()) | ({"slow"} if args.slow else set())
+    enabled = {"fast"} | (set() if args.no_llm else {"llm"}) | ({"browser"} if args.browser else set())
     print(f"UAT: model={args.model} server={CTX['base_url']} workdir={CTX['workdir']}", flush=True)
 
     server = start_server(bin_dir)

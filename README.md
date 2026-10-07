@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-Local--First-black?style=for-the-badge&logo=ollama&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-180%20passed-success?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-212%20passed-success?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 
 **A hardware-aware, local-first multi-model review and decision engine for consumer machines.**
@@ -34,7 +34,8 @@ When you try running multi-model debates on a 16GB consumer laptop using Ollama:
 ## 🎯 The 4 Killer USPs
 
 ### 1. ⚡ Zero-Thrash Hardware Fitting
-Auto-detects your system RAM and available VRAM.
+Auto-detects your system RAM and GPU memory (NVIDIA via `nvidia-smi`, Apple Silicon unified memory; set `COUNCIL_GPU_VRAM_GB` for other GPUs).
+- With **no GPU that can hold a 7B model**, inference runs on the CPU, so every seat shares one small resident model (e.g. `qwen2.5:3b`) and a run takes minutes instead of most of an hour.
 - On **16GB machines**, it keeps a single resident model (e.g. `qwen2.5:7b`) and enforces **persona sampling distributions** (`T=0.15` to `0.35`, `top_p=0.80` to `0.95`) to prevent homogenous groupthink.
 - On **24GB+ machines**, it unlocks true multi-model specialist councils (e.g., Qwen + Gemma + Llama) with strict concurrency semaphores.
 
@@ -80,24 +81,30 @@ LLM Council provides a rich CLI for automated checks, terminal prompts, and repo
 
 ```bash
 # 1. Ask a question or run an architecture deliberation
-python src/council/cli.py ask "Should we migrate from Postgres to SQLite WAL for this service?"
+council ask "Should we migrate from Postgres to SQLite WAL for this service?"
 
 # 2. Review a file or directory with AST dependency graph
-python src/council/cli.py review ./src/council/orchestrator.py
+council review ./src/council/orchestrator.py
 
 # 3. View recent council deliberation history
-python src/council/cli.py history
+council history
 
-# 4. View detected hardware profile and suggested model roster
-python src/council/cli.py models
+# 4. View detected hardware (RAM, GPU/CPU) and suggested model roster
+council models
 
 # 5. Pre-commit check on staged changes
-python src/council/cli.py check_diff
+council check_diff
 
 # Or install as a native git pre-commit hook:
-echo "python src/council/cli.py check_diff" > .git/hooks/pre-commit
+echo "council check_diff --model qwen2.5:3b" > .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
 ```
+
+`ask`, `review` and `check_diff` use the hardware-suggested roster by default. Pick models yourself with
+`--model qwen2.5:3b` (every seat on one model) or `--preset fast|feather|balanced|security_audit|code|...`
+(the presets from the web UI); both together run the preset's personas on your model. Missing models
+are reported with the `ollama pull` command to fix them. From a source checkout, `python src/council/cli.py`
+works the same way.
 
 ### What Happens on `git commit`:
 ```
@@ -168,6 +175,7 @@ Commit accepted.
 | `COUNCIL_HOST` | `127.0.0.1` | Server host binding. Local-only by default. |
 | `COUNCIL_PORT` | `8765` | FastAPI server port. |
 | `COUNCIL_API_KEY` | `""` | Optional API key required when binding to `0.0.0.0` or VPS. |
+| `COUNCIL_GPU_VRAM_GB` | auto-detected | GPU memory for roster sizing; set it when your GPU isn't detected (AMD/Intel), `0` forces CPU mode. |
 | `COUNCIL_MAX_PARALLEL_MEMBERS` | `2` | Max concurrent Ollama inference calls to prevent VRAM thrashing. |
 | `COUNCIL_LLM_TIMEOUT` | `300` | Hard wall-clock timeout in seconds for slow local hardware. |
 | `COUNCIL_ENABLE_WEB_SEARCH` | `false` | Enable DuckDuckGo web search to fact-check council disputes. |
