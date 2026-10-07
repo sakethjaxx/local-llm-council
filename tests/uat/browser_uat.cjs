@@ -18,12 +18,15 @@ async function journey() {
   const errors = [];
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
   page.on('console', (msg) => { if (msg.type() === 'error') errors.push(`console: ${msg.text()}`); });
+  // An alert means the UI refused the action; record it so the journey fails with the reason.
+  page.on('dialog', async (dialog) => { errors.push(`dialog: ${dialog.message()}`); await dialog.dismiss(); });
   try {
     await page.goto(baseURL);
-    await page.waitForFunction(() => document.querySelectorAll('.seat-item').length > 0);
+    await page.waitForFunction(() => /Roster fitted to/.test(document.getElementById('hardwareReason')?.textContent || ''));
     step('UI loaded with hardware-suggested roster');
 
     await page.getByRole('button', { name: 'Turbo', exact: true }).click();
+    await page.waitForFunction(() => new Set([...document.querySelectorAll('.seat-model-select')].map((el) => el.value)).size === 1);
     await page.getByRole('button', { name: 'Economy', exact: true }).click();
     while (await page.locator('.seat-item').count() > 2) {
       await page.locator('.seat-remove').first().click();
@@ -38,6 +41,9 @@ async function journey() {
       .fill('Should a small local CLI tool cache HTTP responses on disk or in memory? Keep it brief.');
     const started = Date.now();
     await page.getByRole('button', { name: 'Run council', exact: true }).click();
+    await page.waitForFunction(() => /PHASE 1/.test(document.getElementById('councilPanel').textContent), null, { timeout: 180000 })
+      .catch(() => { throw new Error(`run did not start: ${errors.join(' | ') || 'no dialog or error'}`); });
+    step('Run started');
     await page.waitForFunction(() => /VERDICT:/.test(document.getElementById('councilPanel').textContent), null,
       { timeout: RUN_TIMEOUT_MS, polling: 2000 });
     const verdict = (await page.locator('#councilPanel h2', { hasText: 'VERDICT:' }).last().textContent()).trim();
