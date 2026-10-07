@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from cloud_keys import litellm_kwargs_for_model
 from embeddings import cosine_similarity as _cosine_similarity
 from logging_utils import get_logger
+from provider_caps import scrub_secret_values
 from provider_caps import caps_for
 
 logger = get_logger(__name__)
@@ -108,6 +109,12 @@ def persist_extracted_triples(conn, triples: list, embed_fn, serialize_fn, deser
         if vector is not None:
             existing_vectors.append((row, vector))
 
+    triples = [
+        triple.model_copy(update={
+            field: scrub_secret_values(getattr(triple, field)) for field in ("subject", "predicate", "object")
+        })
+        for triple in triples
+    ]
     for triple in triples:
         triple_text = f"{triple.subject} {triple.predicate} {triple.object}"
         vector = embed_fn(triple_text)
@@ -161,6 +168,7 @@ async def execute_memory_extraction(
     serialize_fn,
     deserialize_fn,
 ) -> None:
+    topic, verdict = scrub_secret_values(topic), scrub_secret_values(verdict)
     if not should_extract_memory(conn, run_id):
         logger.info("memory_extraction_skipped", extra={"run_id": run_id, "reason": "quality_gate"})
         return

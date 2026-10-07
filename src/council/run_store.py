@@ -359,7 +359,7 @@ class RunStore:
                     SET finished_at = ?, status = ?, error = ?
                     WHERE run_id = ?
                     """,
-                    (time.time(), status, error, run_id),
+                    (time.time(), status, scrub_secret_values(error) if error else error, run_id),
                 )
         except Exception as exc:
             logger.exception("run_store_finish_failed", extra={"run_id": run_id, "status": status, "error": str(exc)})
@@ -412,7 +412,7 @@ class RunStore:
                         note=excluded.note,
                         rated_at=excluded.rated_at
                     """,
-                    (run_id, action_index, rating, note or "", time.time()),
+                    (run_id, action_index, rating, scrub_secret_values(note or ""), time.time()),
                 )
         except Exception as exc:
             logger.exception("run_store_feedback_failed", extra={"run_id": run_id, "error": str(exc)})

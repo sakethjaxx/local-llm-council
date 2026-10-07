@@ -13,7 +13,7 @@ from logging_utils import get_logger
 from metrics_store import metrics_store
 from ollama_manager import auto_pull_enabled, ensure_models_for_config
 from orchestrator import CouncilOrchestrator
-from provider_caps import redact_config
+from provider_caps import StreamScrubber, redact_config, scrub_secret_values
 from shutdown_state import is_shutdown_requested
 
 logger = get_logger(__name__)
@@ -24,6 +24,26 @@ def _main_attr(name: str, default):
     if main_mod is not None and hasattr(main_mod, name):
         return getattr(main_mod, name)
     return default
+
+
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def _scrubbed_events(event: dict, scrubbers: dict) -> list[dict]:
+    """Token chunks pass a per-member StreamScrubber so secrets split across chunks are
+    caught; every other event is redacted whole."""
+    kind, member = event.get("type"), event.get("member")
+    if kind == "member_token":
+        text = scrubbers.setdefault(member, StreamScrubber()).feed(event.get("chunk", ""))
+        return [{**event, "chunk": text}] if text else []
+    events = []
+    if kind == "member_done" and member in scrubbers:
+        held = scrubbers.pop(member).flush()
+        if held:
+            events.append({"type": "member_token", "member": member, "chunk": held})
+    events.append(redact_config(event))
+    return events
 
 
 async def handle_dynamic_swarm(cfg: dict, topic_text: str, attachments: list[dict]):
@@ -91,6 +111,7 @@ async def stream_council_lifecycle(
         orchestrator_cls = _main_attr("CouncilOrchestrator", CouncilOrchestrator)
         orchestrator = orchestrator_cls()
         try:
+            scrubbers: dict = {}
             async for event in orchestrator.run(
                 topic_text, parsed_attachments, cfg, deep_debate,
                 run_id=run_id, token_budget_profile=resolved_budget_profile,
@@ -98,11 +119,13 @@ async def stream_council_lifecycle(
                 if event.get("type") == "shutdown":
                     yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
                     return
-                yield f"data: {json.dumps(redact_config(event))}\n\n"
+                for safe_event in _scrubbed_events(event, scrubbers):
+                    yield _sse(safe_event)
                 await asyncio.sleep(0)
         except Exception as e:
-            m_store.finish_run(run_id, status="failed", error=str(e))
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            message = scrub_secret_values(str(e))
+            m_store.finish_run(run_id, status="failed", error=message)
+            yield _sse({"type": "error", "message": message})
 
 
 async def stream_review_project_lifecycle(
@@ -147,6 +170,7 @@ async def stream_review_project_lifecycle(
         orchestrator_cls = _main_attr("CouncilOrchestrator", CouncilOrchestrator)
         orchestrator = orchestrator_cls()
         try:
+            scrubbers: dict = {}
             async for event in orchestrator.run(
                 topic, attachments, cfg, req_deep_debate,
                 run_id=run_id, token_budget_profile=resolved_budget_profile,
@@ -154,11 +178,13 @@ async def stream_review_project_lifecycle(
                 if event.get("type") == "shutdown":
                     yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
                     return
-                yield f"data: {json.dumps(redact_config(event))}\n\n"
+                for safe_event in _scrubbed_events(event, scrubbers):
+                    yield _sse(safe_event)
                 await asyncio.sleep(0)
         except Exception as e:
-            m_store.finish_run(run_id, status="failed", error=str(e))
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            message = scrub_secret_values(str(e))
+            m_store.finish_run(run_id, status="failed", error=message)
+            yield _sse({"type": "error", "message": message})
 
 
 async def stream_chat_lifecycle(
@@ -176,6 +202,7 @@ async def stream_chat_lifecycle(
         orchestrator_cls = _main_attr("CouncilOrchestrator", CouncilOrchestrator)
         orchestrator = orchestrator_cls()
         try:
+            scrubber = StreamScrubber()
             async for chunk in orchestrator.chat_with_member(
                 req.member_id,
                 req.messages,
@@ -186,7 +213,12 @@ async def stream_chat_lifecycle(
                 if is_shutdown_requested():
                     yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
                     return
-                yield f"data: {json.dumps({'type': 'chat_token', 'chunk': chunk})}\n\n"
-            yield f"data: {json.dumps({'type': 'chat_done'})}\n\n"
+                text = scrubber.feed(chunk)
+                if text:
+                    yield _sse({"type": "chat_token", "chunk": text})
+            held = scrubber.flush()
+            if held:
+                yield _sse({"type": "chat_token", "chunk": held})
+            yield _sse({"type": "chat_done"})
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield _sse({"type": "error", "message": scrub_secret_values(str(e))})

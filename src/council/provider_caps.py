@@ -28,6 +28,39 @@ def scrub_secret_values(text: str) -> str:
     return text
 
 
+# Every pattern above is one run of these characters, except "Bearer <token>".
+# \Z, not $: $ also matches just before a final newline, which would misplace the cut.
+_TRAILING_WORD = re.compile(r"[A-Za-z0-9._-]*\Z")
+_TRAILING_BEARER = re.compile(r"(?i)bearer\s*\Z")
+_MAX_HELD_CHARS = 4096
+
+
+class StreamScrubber:
+    """Scrubs text that arrives in chunks, so a secret split across chunks is still caught.
+
+    The trailing word (and a trailing "Bearer") is held back until the next chunk
+    shows where it ends; call flush() when the stream finishes.
+    """
+
+    def __init__(self) -> None:
+        self._held = ""
+
+    def feed(self, chunk: str) -> str:
+        text = self._held + (chunk or "")
+        cut = _TRAILING_WORD.search(text).start()
+        bearer = _TRAILING_BEARER.search(text[:cut])
+        if bearer:
+            cut = bearer.start()
+        if len(text) - cut > _MAX_HELD_CHARS:
+            cut = len(text)
+        self._held = text[cut:]
+        return scrub_secret_values(text[:cut])
+
+    def flush(self) -> str:
+        held, self._held = self._held, ""
+        return scrub_secret_values(held)
+
+
 @dataclass(frozen=True)
 class ProviderCaps:
     provider: str
@@ -125,14 +158,29 @@ def supports_image_input(model_id: str) -> bool:
     return caps_for(model_id)[0].vision
 
 
+_SENSITIVE_KEY_MARKERS = ("api_key", "apikey", "secret", "password", "authorization")
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    return (
+        key in SENSITIVE_ENV_KEYS
+        or any(marker in lowered for marker in _SENSITIVE_KEY_MARKERS)
+        or lowered.endswith("token")  # token, access_token, refreshToken; not max_tokens or tokens_in
+    )
+
+
 def redact_config(cfg: dict) -> dict:
+    """Copy of cfg without credential fields and with secret-looking values scrubbed.
+
+    Numbers are never treated as credentials, so usage counters such as
+    tokens_in or prompt_tokens survive.
+    """
     def redact(value):
         if isinstance(value, dict):
             result = {}
             for key, nested in value.items():
-                key_text = str(key)
-                lowered = key_text.lower()
-                if key_text in SENSITIVE_ENV_KEYS or any(marker in lowered for marker in ("api_key", "secret", "token")):
+                if _is_sensitive_key(str(key)) and not isinstance(nested, (int, float)):
                     continue
                 result[key] = redact(nested)
             return result

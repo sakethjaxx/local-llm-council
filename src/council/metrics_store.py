@@ -168,7 +168,7 @@ class MetricsStore:
             recent = list(self._recent_runs)[:limit]
         combined = active + recent
         combined.sort(key=lambda run: run["started_at"], reverse=True)
-        return combined[:limit]
+        return [redact_config(run) for run in combined[:limit]]
 
     def get_summary(self) -> dict:
         runs = self.list_runs(limit=self._max_recent_runs())

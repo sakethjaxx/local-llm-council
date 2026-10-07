@@ -7,6 +7,7 @@ from typing import Optional
 from cloud_keys import litellm_kwargs_for_model
 from embeddings import cosine_similarity as _cosine_similarity
 from logging_utils import get_logger
+from provider_caps import scrub_secret_values
 
 logger = get_logger(__name__)
 
@@ -157,8 +158,8 @@ async def extract_and_persist_skill(
         )
         extracted_raw = await request_skill_text(active_litellm, chairman_model, extract_prompt, temperature)
         skill = json.loads(_extract_json_block(extracted_raw))
-        name = str(skill.get("name", "")).strip()
-        body = str(skill.get("body", "")).strip()
+        name = scrub_secret_values(str(skill.get("name", "")).strip())
+        body = scrub_secret_values(str(skill.get("body", "")).strip())
         domain = skill.get("domain")
         if not name or not body:
             return
