@@ -90,6 +90,30 @@ def _python_tool_enabled_for_model(model: str) -> bool:
     return caps_for(model)[0].tool_use
 
 
+MAX_TOOL_CODE_CHARS = 20_000
+
+
+def _python_tool_offered(cfg: dict, phase: int, tool_depth: int) -> bool:
+    return phase == 1 and tool_depth < MAX_TOOL_DEPTH and _python_tool_enabled_for_model(cfg.get("model", ""))
+
+
+def _authorized_python_code(cfg: dict, phase: int, tool_depth: int, tool_call: dict) -> Optional[str]:
+    """Code to run, or None. Re-checked at execution time: a model's tool call is a request, never a grant."""
+    if not _python_tool_offered(cfg, phase, tool_depth):
+        return None
+    function = tool_call.get("function") or {}
+    if function.get("name") != "execute_python":
+        return None
+    try:
+        args = json.loads(function.get("arguments") or "")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    code = args.get("code") if isinstance(args, dict) else None
+    if not isinstance(code, str) or not code.strip() or len(code) > MAX_TOOL_CODE_CHARS:
+        return None
+    return code
+
+
 def _build_messages(model: str, system_prompt: str, user_content) -> list[dict]:
     if caps_for(model)[1].provider == "ollama":
         if isinstance(user_content, list):
@@ -117,7 +141,7 @@ def _build_messages(model: str, system_prompt: str, user_content) -> list[dict]:
 
 def _build_stream_kwargs(cfg: dict, phase: int, messages: list, max_tokens: int, response_format, tool_depth: int):
     tools = None
-    if phase == 1 and tool_depth < MAX_TOOL_DEPTH and _python_tool_enabled_for_model(cfg.get("model", "")):
+    if _python_tool_offered(cfg, phase, tool_depth):
         tools = [
             {
                 "type": "function",
@@ -211,33 +235,33 @@ async def _handle_tool_execution(
 ) -> tuple[str, bool]:
     from tool_repl import execute_python
     for tc in tool_calls:
-        if tc["function"]["name"] == "execute_python":
-            try:
-                args = json.loads(tc["function"]["arguments"])
-                code = args.get("code", "")
-            except json.JSONDecodeError:
-                code = ""
+        code = _authorized_python_code(cfg, phase, tool_depth, tc)
+        if code is None:
+            logger.warning("tool_call_refused", extra={
+                "member_id": member_id, "phase": phase, "tool_depth": tool_depth,
+                "tool": str((tc.get("function") or {}).get("name"))[:64],
+            })
+            continue
+        output = await execute_python(code)
+        sys_msg = f"\n\n> [Sandbox Execution Result]\n> {output}\n\nContinuing analysis...\n"
+        await queue.put({"type": "member_token", "member": member_id, "chunk": sys_msg})
 
-            output = execute_python(code)
-            sys_msg = f"\n\n> [Sandbox Execution Result]\n> {output}\n\nContinuing analysis...\n"
-            await queue.put({"type": "member_token", "member": member_id, "chunk": sys_msg})
+        messages.append({"role": "assistant", "content": full_text or None, "tool_calls": [tc]})
+        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": "execute_python", "content": output})
 
-            messages.append({"role": "assistant", "content": full_text or None, "tool_calls": tool_calls})
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": "execute_python", "content": output})
-
-            additional_text = await orchestrator._stream_llm_to_queue(
-                member_id,
-                cfg,
-                phase,
-                messages,
-                queue,
-                1000,
-                response_format=response_format,
-                run_id=None,
-                emit_done=False,
-                tool_depth=tool_depth + 1,
-            )
-            return full_text + sys_msg + additional_text, True
+        additional_text = await orchestrator._stream_llm_to_queue(
+            member_id,
+            cfg,
+            phase,
+            messages,
+            queue,
+            1000,
+            response_format=response_format,
+            run_id=None,
+            emit_done=False,
+            tool_depth=tool_depth + 1,
+        )
+        return full_text + sys_msg + additional_text, True
     return full_text, False
 
 
