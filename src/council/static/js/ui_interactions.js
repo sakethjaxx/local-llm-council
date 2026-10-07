@@ -77,9 +77,11 @@ function pickInstalledModel(profile, fallback) {
   return installed[Math.floor((installed.length - 1) / 2)].model_id;
 }
 
-function applyModelProfile(profile) {
+async function applyModelProfile(profile) {
   const profileConfig = MODEL_PROFILES[profile];
   if (!profileConfig) return;
+  // Without the catalog the hard-coded fallbacks may not be installed.
+  await loadModelCatalog();
 
   for (const [id, seat] of Object.entries(councilConfig)) {
     const fallback = profileConfig[id] || profileConfig.architect;
