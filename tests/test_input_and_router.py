@@ -35,8 +35,7 @@ class _FakeResponse:
 
 class InputAndRouterTests(unittest.IsolatedAsyncioTestCase):
     def test_parse_uploaded_file_degrades_gracefully_on_bad_pdf(self):
-        with patch.object(io_parser.fitz, "open", side_effect=RuntimeError("bad pdf")):
-            result = io_parser.parse_uploaded_file("broken.pdf", "application/pdf", b"not-a-pdf")
+        result = io_parser.parse_uploaded_file("broken.pdf", "application/pdf", b"not-a-pdf")
 
         self.assertEqual(result["kind"], "unsupported")
         self.assertIn("Failed to parse attachment", result["summary"])

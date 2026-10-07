@@ -9,9 +9,9 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
-import fitz  # PyMuPDF
 
 from logging_utils import get_logger
+from pdf_worker import extract_pdf_text
 
 logger = get_logger(__name__)
 url_pattern = re.compile(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w.-]*')
@@ -107,16 +107,7 @@ def _parse_image_attachment(filename: str, content_type: str) -> dict:
 
 
 def _parse_pdf_attachment(filename: str, content_type: str, raw: bytes) -> dict:
-    with fitz.open(stream=raw, filetype="pdf") as doc:
-        parts = []
-        remaining = TEXT_CHAR_LIMIT + 1
-        for page in doc:
-            text = page.get_text()[:remaining]
-            parts.append(text)
-            remaining -= len(text)
-            if remaining <= 0:
-                break
-        pdf_text = "".join(parts)
+    pdf_text = extract_pdf_text(raw, TEXT_CHAR_LIMIT)  # isolated, time- and memory-limited process
     return {
         "kind": "text",
         "filename": filename or "document.pdf",
