@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-Local--First-black?style=for-the-badge&logo=ollama&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-212%20passed-success?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-259%20passed-success?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 
 **A hardware-aware, local-first multi-model review and decision engine for consumer machines.**
