@@ -34,7 +34,7 @@ async def chunk_and_summarize(text: str, base_model: str) -> str:
 
     logger.info("summarizer_chunking_started", extra={"input_chars": len(text)})
     chunks = _chunk_text(text)
-    timeout = float(os.getenv("COUNCIL_LLM_TIMEOUT", "180"))
+    timeout = float(os.getenv("COUNCIL_LLM_TIMEOUT", "300"))
 
     async def _complete(prompt: str, max_tokens: int) -> str:
         resp = await litellm.acompletion(

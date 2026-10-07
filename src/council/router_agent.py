@@ -127,7 +127,7 @@ async def generate_swarm(
             "model": base_model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 800,
-            "timeout": float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
+            "timeout": float(os.getenv("COUNCIL_LLM_TIMEOUT", "300")),
         }
         if caps_for(base_model)[1].response_format:
             completion_kwargs["response_format"] = SwarmConfig

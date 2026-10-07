@@ -107,7 +107,7 @@ Building Phase 1 + 1.5 + 2 (see `docs/SPEC.md`). See `agent_prompts/` for per-ph
 | `COUNCIL_MAX_UPLOAD_MB` | `20` | Maximum uploaded-file size in MiB |
 | `COUNCIL_MAX_FILES` | `10` | Maximum uploaded attachments |
 | `COUNCIL_ENABLE_PYTHON_TOOL` | `false` | Enable Python REPL tool for cloud models |
-| `COUNCIL_LLM_TIMEOUT` | `180` | Per-call LLM timeout in seconds |
+| `COUNCIL_LLM_TIMEOUT` | `300` | Per-call LLM timeout in seconds (CPU-only machines need the headroom) |
 | `COUNCIL_GPU_VRAM_GB` | auto-detected | GPU memory for roster sizing; `0` forces CPU mode |
 | `COUNCIL_MAX_PARALLEL_MEMBERS` | `4` | Maximum concurrent member LLM calls |
 | `COUNCIL_SMART_PHASE_THRESHOLD` | `0.88` | Similarity threshold used to skip Deep Debate Phase 2 |

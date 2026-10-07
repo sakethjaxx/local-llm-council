@@ -196,7 +196,7 @@ Verdict: {verdict[:1500]}..."""
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 500,
-            "timeout": float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
+            "timeout": float(os.getenv("COUNCIL_LLM_TIMEOUT", "300")),
             **litellm_kwargs_for_model(model),
         }
         if use_response_format:

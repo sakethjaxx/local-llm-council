@@ -32,7 +32,7 @@ async def get_search_context(reviews: dict, extraction_model: str) -> str:
             model=extraction_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=20,
-            timeout=float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
+            timeout=float(os.getenv("COUNCIL_LLM_TIMEOUT", "300")),
             **litellm_kwargs_for_model(extraction_model),
         )
         query = resp.choices[0].message.content.strip().replace('"', '')
