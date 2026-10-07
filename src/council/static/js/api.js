@@ -3,6 +3,7 @@ let modelCatalog = null;
 let allLoadedReplays = [];
 let projectScanGeneration = 0;
 let preflightGeneration = 0;
+let latestPreflight = Promise.resolve();
 
 const CLOUD_MODEL_CHOICES = [
   { model_id: 'openai/gpt-4o-mini', label: 'gpt-4o-mini (OpenAI key)' },
@@ -227,7 +228,22 @@ async function onPresetSelected(presetId) {
   refreshPreflight();
 }
 
-async function refreshPreflight() {
+function refreshPreflight() {
+  latestPreflight = runPreflight();
+  return latestPreflight;
+}
+
+// Resolves once the most recent preflight (including any started meanwhile) has finished.
+async function settledPreflight() {
+  let pending;
+  do {
+    pending = latestPreflight;
+    await pending;
+  } while (pending !== latestPreflight);
+  return preflightState;
+}
+
+async function runPreflight() {
   const generation = ++preflightGeneration;
   preflightState = null;
   const box = document.getElementById('preflightBox');

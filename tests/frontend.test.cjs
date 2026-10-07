@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function runtime() {
+function runtime(files = ['state.js', 'stream_handler.js']) {
   const elements = new Map();
   const writes = [];
   const context = vm.createContext({
@@ -15,7 +15,7 @@ function runtime() {
     localStorage: { getItem: () => null, setItem: (...args) => writes.push(args), removeItem: () => {} },
     fetch: async () => ({ status: 200 }),
   });
-  for (const filename of ['state.js', 'stream_handler.js']) {
+  for (const filename of files) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/council/static/js', filename), 'utf8'), context);
   }
   return { context, elements, writes, evaluate: source => vm.runInContext(source, context) };
@@ -83,6 +83,7 @@ test('ending an aborted run cannot clear a newer run controller', async () => {
   app.elements.set('topicText', { value: 'review' });
   app.elements.set('councilPanel', {});
   app.context.refreshPreflight = async () => app.evaluate('preflightState = {ready:true}');
+  app.context.settledPreflight = async () => app.evaluate('preflightState');
   app.context.renderLoadingState = () => {};
   app.context.showToast = () => {};
   app.context.handleEvent = () => {};
@@ -103,4 +104,21 @@ test('ending an aborted run cannot clear a newer run controller', async () => {
   await second;
   assert.equal(app.evaluate('activeCouncilAbortController'), null);
   assert.equal(classes.has('btn-danger'), false);
+});
+
+test('launch preflight settles on the newest roster check instead of a cleared state', async () => {
+  const app = runtime(['state.js', 'api.js', 'stream_handler.js']);
+  app.elements.set('preflightBox', { innerHTML: '' });
+  const pending = [];
+  app.context.fetch = () => new Promise(resolve => pending.push(resolve));
+  const reply = { ok: true, status: 200, json: async () => ({ ready: true, missing: [], warnings: [] }) };
+  app.evaluate('refreshPreflight()');  // the launch's own check
+  app.evaluate('refreshPreflight()');  // a roster edit lands meanwhile
+  const settled = app.evaluate('settledPreflight()');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  pending[0](reply);  // the superseded check finishes first and is ignored
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(app.evaluate('preflightState'), null);
+  pending[1](reply);
+  assert.equal((await settled).ready, true);
 });

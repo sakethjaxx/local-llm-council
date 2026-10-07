@@ -63,7 +63,9 @@ async function launchCouncil() {
   if (!topic && !selectedFiles.length) return alert('Enter a topic or attach at least one file.');
   const controller = new AbortController();
   activeCouncilAbortController = controller;
-  await refreshPreflight();
+  // A roster edit can start a newer preflight while this one runs; judge the latest result.
+  refreshPreflight();
+  await settledPreflight();
   if (controller.signal.aborted) return;
   if (!preflightState || !preflightState.ready) {
     if (activeCouncilAbortController === controller) activeCouncilAbortController = null;
