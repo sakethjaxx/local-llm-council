@@ -80,6 +80,9 @@ from skill_registry import skill_registry
 
 logger = get_logger(__name__)
 APP_DIR = pathlib.Path(__file__).resolve().parent
+# Helpers find the running app via sys.modules["main"]. Served as council.main, register
+# that name too so lookups hit this module and nothing can import a second copy of the app.
+sys.modules.setdefault("main", sys.modules[__name__])
 
 MAX_CONCURRENT_STREAMS = _int_env("COUNCIL_MAX_CONCURRENT_RUNS", 4)
 _OLLAMA_TAG_WHITELIST = {

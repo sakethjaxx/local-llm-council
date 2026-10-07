@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import council_env  # noqa: F401  # must run before modules that read settings at import time
 from blast_radius import calculate_blast_radius
 from demo_catalog import load_presets
 from hardware_detect import get_hardware_suggestion

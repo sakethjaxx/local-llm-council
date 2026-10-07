@@ -9,6 +9,10 @@ os.environ.setdefault(
     os.path.join(tempfile.mkdtemp(prefix="council-test-"), "test_runs.db"),
 )
 os.environ.setdefault("COUNCIL_METRICS_FILE", "")
+# Never let the developer's checkout .env (keys, DB path, API key) leak into tests.
+_EMPTY_ENV = os.path.join(tempfile.mkdtemp(prefix="council-test-env-"), "empty.env")
+open(_EMPTY_ENV, "w").close()
+os.environ.setdefault("COUNCIL_ENV_FILE", _EMPTY_ENV)
 # Roster suggestions depend on GPU memory; pin it so results don't vary by host.
 os.environ.setdefault("COUNCIL_GPU_VRAM_GB", "24")
 

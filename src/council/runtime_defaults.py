@@ -8,6 +8,8 @@ import warnings
 # default local-first server boot fully offline.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# Otherwise LiteLLM loads a .env from the working directory on import (see council_env).
+os.environ.setdefault("LITELLM_MODE", "PRODUCTION")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 # Ollama binds 127.0.0.1 by default. "localhost" makes clients try IPv6 ::1 first,
 # which costs ~2s per connection on Windows; LiteLLM and our helpers both read this.
