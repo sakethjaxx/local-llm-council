@@ -12,6 +12,7 @@ import numpy as np
 from db import db_connect
 from embeddings import cosine_similarity as _cosine_similarity, get_embedder
 from logging_utils import get_logger
+from shutdown_state import track_background
 from memory_embeddings import (
     _to_vector,
     deserialize_embedding,
@@ -140,7 +141,7 @@ class SkillRegistry:
         vector = await asyncio.to_thread(self._embed_text, topic)
         skills = _rank_and_score_skills(rows, vector, top_k)
         if skills:
-            asyncio.create_task(asyncio.to_thread(self._increment_used_count, [skill["id"] for skill in skills]))
+            track_background(asyncio.to_thread(self._increment_used_count, [skill["id"] for skill in skills]))
         return skills
 
     def _increment_used_count(self, skill_ids: list[int]) -> None:
@@ -156,6 +157,7 @@ class SkillRegistry:
         return "\n".join(lines) + "\n\n"
 
     def list_skills(self, limit: int = 50, domain: Optional[str] = None) -> list[dict]:
+        limit = max(1, min(int(limit), 500))  # SQLite treats LIMIT -1 as no limit
         with self._connection() as conn:
             return list_skill_records(conn, limit, domain)
 

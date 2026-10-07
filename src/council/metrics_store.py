@@ -163,6 +163,7 @@ class MetricsStore:
             pass
 
     def list_runs(self, limit: int = 20) -> list[dict]:
+        limit = max(1, min(int(limit), 500))
         with self._lock:
             active = list(self._active_runs.values())
             recent = list(self._recent_runs)[:limit]

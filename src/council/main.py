@@ -72,6 +72,8 @@ from schemas import (
 )
 from shutdown_state import (
     clear_shutdown_request,
+    drain_background,
+    track_background,
     is_shutdown_requested,
     request_shutdown,
     wait_for_active_streams,
@@ -113,26 +115,19 @@ except (ValueError, AttributeError):
     pass
 
 
-def _consume_background_task(task: asyncio.Task) -> None:
-    if task.cancelled():
-        return
-    try:
-        task.exception()
-    except asyncio.CancelledError:
-        return
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     del app
     clear_shutdown_request()
+    interrupted = await asyncio.to_thread(run_store.mark_interrupted_runs)
+    if interrupted:
+        logger.warning("interrupted_runs_closed", extra={"count": interrupted})
     for coro in (
         asyncio.to_thread(memory_store.rebuild_embeddings),
         asyncio.to_thread(memory_store.prune_memory),
         asyncio.to_thread(skill_registry.deduplicate_skills),
     ):
-        t = asyncio.create_task(coro)
-        t.add_done_callback(_consume_background_task)
+        track_background(coro)
     yield
     request_shutdown()
     # wait_for_active_streams() polls with time.sleep, so it must run off the loop
@@ -140,6 +135,9 @@ async def lifespan(app: FastAPI):
     remaining = await asyncio.to_thread(wait_for_active_streams, 15.0, 0.1)
     if remaining:
         logger.warning("shutdown_timed_out", extra={"active_streams": remaining})
+    cancelled = await drain_background(10.0)
+    if cancelled:
+        logger.warning("background_tasks_cancelled_at_shutdown", extra={"count": cancelled})
 
 
 # Authentication, body limits and run admission happen in BrowserBoundaryMiddleware,

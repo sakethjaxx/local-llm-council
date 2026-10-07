@@ -10,7 +10,7 @@ from memory_store import memory_store as default_memory_engine
 from metrics_store import metrics_store
 from project_fingerprint import fingerprint
 from run_store import run_store as default_run_store
-from shutdown_state import is_shutdown_requested
+from shutdown_state import is_shutdown_requested, track_background
 from skill_registry import skill_registry as default_skill_registry
 from summarizer import chunk_and_summarize as default_chunk_and_summarize
 
@@ -162,8 +162,7 @@ async def finalize_run(
         except Exception as b_exc:
             logger.warning("background_skill_extraction_failed", extra={"run_id": r_id, "error": str(b_exc)})
 
-    task = asyncio.create_task(
+    track_background(
         _background_post_run(run_id, combined_topic, chairman_decision_text, chairman_cfg["model"])
     )
-    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
     return final_status, final_error

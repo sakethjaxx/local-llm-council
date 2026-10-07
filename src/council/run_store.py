@@ -364,6 +364,18 @@ class RunStore:
         except Exception as exc:
             logger.exception("run_store_finish_failed", extra={"run_id": run_id, "status": status, "error": str(exc)})
 
+    def mark_interrupted_runs(self) -> int:
+        """Close runs left 'running' by a process that died; returns how many were closed."""
+        with self._connection() as conn:
+            return conn.execute(
+                """
+                UPDATE runs SET status = 'interrupted', finished_at = ?,
+                    error = 'The server stopped before this run finished.'
+                WHERE status = 'running'
+                """,
+                (time.time(),),
+            ).rowcount
+
     def update_smart_phase_score(self, run_id, score):
         try:
             with self._connection() as conn:

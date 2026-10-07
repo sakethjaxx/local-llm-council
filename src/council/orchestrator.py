@@ -240,9 +240,12 @@ class CouncilOrchestrator:
             raise
         finally:
             active_store = getattr(sys.modules.get("orchestrator"), "run_store", run_store)
-            for t in spawned_tasks:
-                if not t.done():
-                    t.cancel()
+            pending = [t for t in spawned_tasks if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                # Wait (bounded) so cancelled provider streams are really closed.
+                await asyncio.wait(pending, timeout=5.0)
             if not run_finalized:
                 with contextlib.suppress(Exception):
                     metrics_store.finish_run(run_id, status="cancelled", error="Run interrupted before completion")

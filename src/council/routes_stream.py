@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import copy
 import json
 import sys
@@ -112,16 +113,19 @@ async def stream_council_lifecycle(
         orchestrator = orchestrator_cls()
         try:
             scrubbers: dict = {}
-            async for event in orchestrator.run(
+            # aclosing: a client disconnect closes the pipeline now (cancelling member
+            # calls) instead of whenever the abandoned generator is garbage-collected.
+            async with contextlib.aclosing(orchestrator.run(
                 topic_text, parsed_attachments, cfg, deep_debate,
                 run_id=run_id, token_budget_profile=resolved_budget_profile,
-            ):
-                if event.get("type") == "shutdown":
-                    yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
-                    return
-                for safe_event in _scrubbed_events(event, scrubbers):
-                    yield _sse(safe_event)
-                await asyncio.sleep(0)
+            )) as stream:
+                async for event in stream:
+                    if event.get("type") == "shutdown":
+                        yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
+                        return
+                    for safe_event in _scrubbed_events(event, scrubbers):
+                        yield _sse(safe_event)
+                    await asyncio.sleep(0)
         except Exception as e:
             message = scrub_secret_values(str(e))
             m_store.finish_run(run_id, status="failed", error=message)
@@ -171,16 +175,19 @@ async def stream_review_project_lifecycle(
         orchestrator = orchestrator_cls()
         try:
             scrubbers: dict = {}
-            async for event in orchestrator.run(
+            # aclosing: a client disconnect closes the pipeline now (cancelling member
+            # calls) instead of whenever the abandoned generator is garbage-collected.
+            async with contextlib.aclosing(orchestrator.run(
                 topic, attachments, cfg, req_deep_debate,
                 run_id=run_id, token_budget_profile=resolved_budget_profile,
-            ):
-                if event.get("type") == "shutdown":
-                    yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
-                    return
-                for safe_event in _scrubbed_events(event, scrubbers):
-                    yield _sse(safe_event)
-                await asyncio.sleep(0)
+            )) as stream:
+                async for event in stream:
+                    if event.get("type") == "shutdown":
+                        yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
+                        return
+                    for safe_event in _scrubbed_events(event, scrubbers):
+                        yield _sse(safe_event)
+                    await asyncio.sleep(0)
         except Exception as e:
             message = scrub_secret_values(str(e))
             m_store.finish_run(run_id, status="failed", error=message)
@@ -203,19 +210,22 @@ async def stream_chat_lifecycle(
         orchestrator = orchestrator_cls()
         try:
             scrubber = StreamScrubber()
-            async for chunk in orchestrator.chat_with_member(
+            # aclosing: a client disconnect closes the pipeline now (cancelling member
+            # calls) instead of whenever the abandoned generator is garbage-collected.
+            async with contextlib.aclosing(orchestrator.chat_with_member(
                 req.member_id,
                 req.messages,
                 req.council_config,
                 run_id=run_id,
                 token_budget_profile=resolved_budget_profile,
-            ):
-                if is_shutdown_requested():
-                    yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
-                    return
-                text = scrubber.feed(chunk)
-                if text:
-                    yield _sse({"type": "chat_token", "chunk": text})
+            )) as stream:
+                async for chunk in stream:
+                    if is_shutdown_requested():
+                        yield f"data: {json.dumps(shutdown_event_payload)}\n\n"
+                        return
+                    text = scrubber.feed(chunk)
+                    if text:
+                        yield _sse({"type": "chat_token", "chunk": text})
             held = scrubber.flush()
             if held:
                 yield _sse({"type": "chat_token", "chunk": held})

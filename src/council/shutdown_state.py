@@ -1,8 +1,41 @@
+import asyncio
+import logging
 import threading
 import time
 
 
 _shutdown_requested = threading.Event()
+_background_tasks: set[asyncio.Task] = set()
+_logger = logging.getLogger(__name__)
+
+
+def track_background(coro) -> asyncio.Task:
+    """Start fire-and-forget work that shutdown can still drain or cancel.
+
+    Holding the reference also keeps asyncio from garbage-collecting the task mid-flight.
+    """
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_done)
+    return task
+
+
+def _background_done(task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        _logger.warning("background_task_failed", extra={"error": str(task.exception())})
+
+
+async def drain_background(timeout_s: float) -> int:
+    """Let tracked work finish for up to timeout_s, then cancel the rest; returns how many were cancelled."""
+    pending = {task for task in _background_tasks if not task.done()}
+    if pending:
+        _, pending = await asyncio.wait(pending, timeout=timeout_s)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=2.0)
+    return len(pending)
 _active_runs = 0
 _lock = threading.Lock()
 

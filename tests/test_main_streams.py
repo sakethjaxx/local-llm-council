@@ -149,13 +149,6 @@ class MainStreamsTests(unittest.IsolatedAsyncioTestCase):
             chunks.append(chunk)
         return "".join(chunks)
 
-    async def test_background_task_completion_ignores_cancellation(self):
-        task = asyncio.create_task(asyncio.sleep(60))
-        task.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await task
-        main._consume_background_task(task)
-
     async def test_project_review_records_failed_run_when_models_are_missing(self):
         graph = {"stats": {"files": 1}, "nodes": [{"id": "app.py"}], "review_input": "Review app"}
         missing = {"ready": False, "missing": ["qwen2.5:7b"], "installed": [], "required": ["qwen2.5:7b"]}
