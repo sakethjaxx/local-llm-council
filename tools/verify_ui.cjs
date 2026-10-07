@@ -47,6 +47,23 @@ async function verify() {
       await page.screenshot({ path: path.join(output, `history-${viewport.width}.png`) });
       await page.getByRole('button', { name: 'Close run history', exact: true }).click();
 
+      // Model Markdown must not load remote resources; links open safely.
+      const rendered = await page.evaluate(() => {
+        const box = document.createElement('div');
+        box.innerHTML = renderMarkdown('![x](https://tracker.example/p.png?q=topic) [docs](https://docs.example) ![ok](/static/x.png)');
+        return { imgs: [...box.querySelectorAll('img')].map((img) => img.getAttribute('src')),
+                 rel: box.querySelector('a')?.getAttribute('rel') };
+      });
+      assert.deepEqual(rendered.imgs, [null, '/static/x.png'], JSON.stringify(rendered));
+      assert.equal(rendered.rel, 'noopener noreferrer');
+
+      for (const view of ['Memory', 'Code Graph']) {
+        await page.getByRole('button', { name: view, exact: true }).click();
+        await page.waitForFunction(() => document.getElementById('memoryModal').style.display === 'flex');
+        await page.waitForTimeout(500);
+        await page.getByRole('button', { name: 'Close graph', exact: true }).click();
+      }
+
       await page.getByRole('textbox', { name: 'Review topic', exact: true }).fill('Review this synthetic project');
       await page.getByRole('button', { name: 'Run council', exact: true }).click();
       await page.waitForFunction(() => document.getElementById('councilPanel').textContent.includes('PROCEED'));

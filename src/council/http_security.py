@@ -15,6 +15,14 @@ from starlette.responses import JSONResponse
 from shutdown_state import release_run_slot, try_reserve_run_slot
 
 MAX_BODY_BYTES = 52 * 1024 * 1024
+# Everything is self-hosted, so nothing may be fetched from, or sent to, another origin.
+# Inline scripts stay allowed only because index.html wires controls with inline
+# handlers; moving those to listeners would let 'unsafe-inline' go.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; "
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+)
 # Endpoints that start model work; each holds one run slot from admission until its stream ends.
 RUN_PATHS = {"/council/stream", "/council/review-project", "/council/chat"}
 _PUBLIC_PREFIXES = ("/static/", "/demo-samples/")
@@ -121,6 +129,7 @@ class BrowserBoundaryMiddleware:
                     (b"x-content-type-options", b"nosniff"),
                     (b"referrer-policy", b"no-referrer"),
                     (b"x-frame-options", b"DENY"),
+                    (b"content-security-policy", CONTENT_SECURITY_POLICY.encode()),
                 ])
                 if scope["path"] != "/" and not scope["path"].startswith(_PUBLIC_PREFIXES):
                     response_headers.append((b"cache-control", b"no-store"))

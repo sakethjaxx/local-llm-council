@@ -73,6 +73,36 @@ if (window.marked) {
   marked.setOptions({ gfm: true, breaks: true });
 }
 
+function isSameOriginUrl(value) {
+  try {
+    const url = new URL(value, window.location.href);
+    return url.origin === window.location.origin || (url.protocol === 'data:' && /^data:image\//i.test(value));
+  } catch {
+    return false;
+  }
+}
+
+// Model output is untrusted: a remote image URL in its Markdown would load
+// automatically and could carry the conversation to another server.
+const RESOURCE_ATTRIBUTES = ['src', 'srcset', 'poster', 'background', 'action', 'formaction', 'xlink:href'];
+function stripRemoteResources(node) {
+  for (const attribute of RESOURCE_ATTRIBUTES) {
+    const value = node.getAttribute && node.getAttribute(attribute);
+    if (value != null && (attribute === 'srcset' || !isSameOriginUrl(value))) {
+      node.removeAttribute(attribute);
+      if (node.tagName === 'IMG') node.setAttribute('title', 'Remote image blocked');
+    }
+  }
+  if (node.tagName === 'A' && node.getAttribute('href')) {
+    node.setAttribute('rel', 'noopener noreferrer');
+    node.setAttribute('target', '_blank');
+  }
+}
+
+if (window.DOMPurify && DOMPurify.addHook) {
+  DOMPurify.addHook('afterSanitizeAttributes', stripRemoteResources);
+}
+
 function sanitizeHtml(html) {
   if (window.DOMPurify) {
     return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });

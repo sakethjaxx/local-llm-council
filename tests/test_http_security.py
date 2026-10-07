@@ -63,6 +63,11 @@ class BrowserBoundaryTests(unittest.IsolatedAsyncioTestCase):
         headers = dict(messages[0]["headers"])
         self.assertEqual(headers[b"cache-control"], b"no-store")
         self.assertEqual(headers[b"x-frame-options"], b"DENY")
+        csp = headers[b"content-security-policy"].decode()
+        for directive in ("default-src 'self'", "connect-src 'self'", "img-src 'self' data: blob:",
+                          "object-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"):
+            self.assertIn(directive, csp)
+        self.assertNotIn("http", csp)  # no third-party origins anywhere
 
     async def test_keyed_remote_host_requires_the_key(self):
         remote = {"host": "council.example", "origin": "http://council.example"}
