@@ -26,11 +26,13 @@ async function journey() {
     step('UI loaded with hardware-suggested roster');
 
     await page.getByRole('button', { name: 'Turbo', exact: true }).click();
+    step('Turbo clicked');
     await page.waitForFunction(() => new Set([...document.querySelectorAll('.seat-model-select')].map((el) => el.value)).size === 1);
     await page.getByRole('button', { name: 'Economy', exact: true }).click();
     while (await page.locator('.seat-item').count() > 2) {
       await page.locator('.seat-remove').first().click();
     }
+    step('Extra seats removed; waiting for preflight');
     const models = await page.locator('.seat-model-select').evaluateAll((els) => els.map((el) => el.value));
     assert.equal(new Set(models).size, 1, `Turbo should put every seat on one small model: ${models}`);
     assert.equal(await page.locator('.seat-model-missing').count(), 0, 'Turbo picked a model that is not installed');
