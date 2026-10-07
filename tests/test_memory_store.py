@@ -58,6 +58,36 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("microservices -> decided_to_use -> service mesh", context)
 
+    async def test_slow_embedding_does_not_block_the_event_loop(self):
+        import asyncio
+
+        class SlowEmbedder(_FakeEmbedder):
+            def encode(self, text):
+                time.sleep(0.3)  # stands in for the first-call model load
+                return super().encode(text)
+
+        async def fake_acompletion(*args, **kwargs):
+            return _fake_completion_with_triples(
+                [{"subject": "microservices", "predicate": "decided_to_use", "object": "service mesh"}]
+            )
+
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        tick_task = asyncio.create_task(ticker())
+        with patch("memory_store.get_embedder", return_value=SlowEmbedder()), \
+             patch("memory_store.litellm.acompletion", side_effect=fake_acompletion):
+            await self.store.extract_memory("microservices design", "use service mesh", "test-model")
+            await self.store.get_context("service mesh architecture", "test-model")
+        tick_task.cancel()
+        # >= 0.6s of embedding ran; a blocked loop would manage only a handful of ticks.
+        self.assertGreater(ticks, 20)
+
     async def test_extract_memory_forwards_scoped_key_and_timeout(self):
         async def fake_acompletion(*args, **kwargs):
             return _fake_completion_with_triples([])

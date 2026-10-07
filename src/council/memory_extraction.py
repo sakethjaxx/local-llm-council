@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -197,8 +198,9 @@ Verdict: {verdict[:1500]}..."""
         raw_output = resp.choices[0].message.content
         data = MemoryExtraction.model_validate_json(_extract_json_block(raw_output))
 
-        added, updated = persist_extracted_triples(
-            conn, data.triples, embed_fn, serialize_fn, deserialize_fn
+        # Embedding (and the one-time model load) is CPU-bound: keep it off the event loop.
+        added, updated = await asyncio.to_thread(
+            persist_extracted_triples, conn, data.triples, embed_fn, serialize_fn, deserialize_fn
         )
         logger.info("memory_extraction_completed", extra={"run_id": run_id, "added": added, "reinforced": updated})
     except Exception as exc:

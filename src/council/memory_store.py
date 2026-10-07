@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sqlite3
@@ -103,8 +104,9 @@ class SQLiteMemory:
     async def get_context(self, topic: str, extraction_model: str, top_k: int = 10) -> str:
         del extraction_model
         with self._connection() as conn:
-            return query_memory_context(
-                conn, topic, self._embed_text, self._deserialize_embedding, MEMORY_RELEVANCE_FLOOR, top_k
+            return await asyncio.to_thread(
+                query_memory_context,
+                conn, topic, self._embed_text, self._deserialize_embedding, MEMORY_RELEVANCE_FLOOR, top_k,
             )
 
     def get_graph_data(self) -> dict:
