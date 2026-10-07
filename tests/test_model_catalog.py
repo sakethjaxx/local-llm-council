@@ -27,6 +27,19 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertFalse(llama70b["installed"])
         self.assertEqual(llama70b["tier"], "very_heavy")
 
+    def test_installed_tag_outside_registry_is_listed_with_its_real_size(self):
+        with patch("hardware_detect._installed_models", return_value=["ollama/llama3.2:latest"]), \
+             patch("ollama_manager.installed_model_sizes_gb", return_value={"llama3.2:latest": 2.019}), \
+             patch("psutil.virtual_memory") as mem:
+            mem.return_value.total = 16 * (1024 ** 3)
+            catalog = hardware_detect.get_model_catalog()
+
+        entry = next(m for m in catalog["models"] if m["tag"] == "llama3.2:latest")
+        self.assertTrue(entry["installed"])
+        self.assertEqual(entry["model_id"], "ollama/llama3.2:latest")
+        self.assertEqual(entry["size_gb"], 2.0)
+        self.assertEqual([m["size_gb"] for m in catalog["models"]], sorted(m["size_gb"] for m in catalog["models"]))
+
     def test_catalog_sorted_by_size_ascending(self):
         with patch("hardware_detect._installed_models", return_value=[]), \
              patch("psutil.virtual_memory") as mem:

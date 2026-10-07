@@ -43,18 +43,27 @@ def ollama_base_url() -> str:
     return (os.getenv("OLLAMA_API_BASE") or "http://localhost:11434").rstrip("/")
 
 
+def _ollama_tags() -> list[dict]:
+    try:
+        resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=5.0)
+        resp.raise_for_status()
+        return [m for m in resp.json().get("models", []) if m.get("name")]
+    except Exception:
+        return []
+
+
 def get_installed_models() -> list[str]:
     """Tags the Ollama daemon can serve, or [] when it is unreachable.
 
     Asks the HTTP API rather than `ollama list` so detection also works when the
     CLI is not on PATH, e.g. this app in Docker talking to Ollama on the host.
     """
-    try:
-        resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=5.0)
-        resp.raise_for_status()
-        return [m["name"] for m in resp.json().get("models", []) if m.get("name")]
-    except Exception:
-        return []
+    return [m["name"] for m in _ollama_tags()]
+
+
+def installed_model_sizes_gb() -> dict[str, float]:
+    """On-disk size per installed tag, in decimal GB like the curated size table."""
+    return {m["name"]: m.get("size", 0) / 1e9 for m in _ollama_tags()}
 
 
 def get_required_models(config: dict | None = None) -> list[str]:

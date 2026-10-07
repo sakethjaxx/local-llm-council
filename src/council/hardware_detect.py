@@ -410,6 +410,28 @@ def get_model_catalog() -> dict:
             "notes": caps.notes,
             "strengths": caps.strengths,
         })
+    # Tags pulled outside the curated registry (e.g. `ollama pull llama3.2` installs
+    # llama3.2:latest) must still show as installed and selectable.
+    uncurated = sorted(installed - set(PROVIDER_MODELS))
+    if uncurated:
+        from ollama_manager import installed_model_sizes_gb
+
+        sizes = installed_model_sizes_gb()
+        for model_id in uncurated:
+            tag = model_id.split("/", 1)[1]
+            size_gb = sizes.get(tag) or _get_model_gb(model_id)
+            entries.append({
+                "tag": tag,
+                "model_id": model_id,
+                "size_gb": round(size_gb, 1),
+                "min_ram_gb": round(size_gb * _EFF + 3.0, 1),
+                "installed": True,
+                "fits_now": _fits(size_gb, budget),
+                "recommended": model_id in recommended_models,
+                "tier": _tier_for_size(size_gb),
+                "notes": "Installed locally; not in the curated catalog.",
+                "strengths": [],
+            })
     entries.sort(key=lambda e: e["size_gb"])
 
     return {
