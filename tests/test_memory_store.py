@@ -99,7 +99,7 @@ class MemoryStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completion.call_args.kwargs["api_key"], "sk-test")
         self.assertEqual(
             completion.call_args.kwargs["timeout"],
-            float(os.getenv("COUNCIL_LLM_TIMEOUT", "180")),
+            float(os.getenv("COUNCIL_LLM_TIMEOUT", "300")),
         )
 
     async def test_get_context_returns_empty_when_nothing_is_relevant(self):
