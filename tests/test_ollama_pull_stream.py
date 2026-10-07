@@ -72,12 +72,16 @@ class InstalledModelsTests(unittest.TestCase):
                 return {"models": [{"name": "qwen2.5:7b"}, {"name": "llama3.2:latest"}]}
 
         with patch.dict("os.environ", {"OLLAMA_API_BASE": "http://ollama-host:11434/"}), \
-                patch("ollama_manager.httpx.get", return_value=FakeResponse()) as fake_get:
+                patch.object(ollama_manager._http, "get", return_value=FakeResponse()) as fake_get:
             self.assertEqual(ollama_manager.get_installed_models(), ["qwen2.5:7b", "llama3.2:latest"])
-        fake_get.assert_called_once_with("http://ollama-host:11434/api/tags", timeout=5.0)
+        fake_get.assert_called_once_with("http://ollama-host:11434/api/tags")
+
+    def test_default_daemon_url_avoids_the_localhost_ipv6_detour(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(ollama_manager.ollama_base_url(), "http://127.0.0.1:11434")
 
     def test_unreachable_daemon_means_no_models(self):
-        with patch("ollama_manager.httpx.get", side_effect=OSError("connection refused")):
+        with patch.object(ollama_manager._http, "get", side_effect=OSError("connection refused")):
             self.assertEqual(ollama_manager.get_installed_models(), [])
 
 

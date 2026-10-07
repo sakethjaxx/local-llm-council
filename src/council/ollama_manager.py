@@ -40,12 +40,16 @@ def _iter_ollama_models(config: dict) -> Iterable[str]:
 
 def ollama_base_url() -> str:
     """Ollama daemon URL; OLLAMA_API_BASE is the variable LiteLLM itself reads."""
-    return (os.getenv("OLLAMA_API_BASE") or "http://localhost:11434").rstrip("/")
+    return (os.getenv("OLLAMA_API_BASE") or "http://127.0.0.1:11434").rstrip("/")
+
+
+# One pooled client: building a client per call costs ~0.5s of TLS setup on slow machines.
+_http = httpx.Client(timeout=5.0)
 
 
 def _ollama_tags() -> list[dict]:
     try:
-        resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=5.0)
+        resp = _http.get(f"{ollama_base_url()}/api/tags")
         resp.raise_for_status()
         return [m for m in resp.json().get("models", []) if m.get("name")]
     except Exception:
