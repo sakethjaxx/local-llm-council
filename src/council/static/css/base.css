@@ -15,6 +15,7 @@
   --accent-strong: #005bb5;
   --accent-soft: rgba(0, 113, 227, 0.10);
   --success: #248a3d;
+  --success-strong: #1a6b2f;
   --warm: #b26a00;
   --danger: #d70015;
   --chairman: #5856d6;
@@ -42,6 +43,7 @@ body[data-theme="dark"] {
   --accent-strong: #409cff;
   --accent-soft: rgba(10, 132, 255, 0.17);
   --success: #30d158;
+  --success-strong: #30d158;
   --warm: #ffd60a;
   --danger: #ff453a;
   --chairman: #7d7aff;

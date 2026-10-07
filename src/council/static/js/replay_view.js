@@ -53,12 +53,12 @@ function renderFilteredReplays(runs) {
     const started = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : 'unknown';
     const topic = escapeHtml((run.topic || '').slice(0, 72) || 'Untitled run');
     return `
-      <div class="replay-run-item" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-          <div class="replay-run-title">${topic}</div>
-          <button class="btn btn-small btn-danger replay-delete-btn" onclick="event.stopPropagation(); deleteSingleReplay('${escapeHtml(run.run_id)}')" title="Delete this run">🗑️</button>
-        </div>
-        <div class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</div>
+      <div class="replay-run-item">
+        <button type="button" class="replay-run-open" onclick="loadReplayRunDetail('${escapeHtml(run.run_id)}')">
+          <span class="replay-run-title">${topic}</span>
+          <span class="replay-run-meta">run_id: ${escapeHtml(run.run_id)}<br>status: ${escapeHtml(run.status)}<br>started: ${escapeHtml(started)}</span>
+        </button>
+        <button type="button" class="btn btn-small btn-danger replay-delete-btn" onclick="deleteSingleReplay('${escapeHtml(run.run_id)}')" title="Delete this run" aria-label="Delete run: ${topic}">🗑️</button>
       </div>
     `;
   }).join('');

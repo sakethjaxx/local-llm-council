@@ -144,9 +144,11 @@
       <details class="accordion">
         <summary>
           <span>6. Cloud API Keys (Optional)</span>
-          <button class="btn btn-small accordion-action" onclick="event.preventDefault(); clearCloudKeys();">Clear</button>
         </summary>
         <div class="accordion-content">
+          <div class="accordion-toolbar">
+            <button type="button" class="btn btn-small" onclick="clearCloudKeys()">Clear keys</button>
+          </div>
           <div class="cloud-key-grid">
             <div class="cloud-key-row">
               <div class="cloud-key-label">OpenAI</div>
@@ -194,7 +196,8 @@
 
   <!-- MODALS -->
   <div class="modal-overlay" id="connectionModal">
-    <form class="modal-content connection-dialog" role="dialog" aria-modal="true" aria-labelledby="connectionTitle" onsubmit="connectServer(event)">
+    <div class="modal-content connection-dialog" role="dialog" aria-modal="true" aria-labelledby="connectionTitle">
+    <form class="connection-form" onsubmit="connectServer(event)">
       <div class="modal-header">
         <span id="connectionTitle">Server connection</span>
         <button type="button" class="btn btn-small" aria-label="Close connection" onclick="closeDialog('connectionModal')">X</button>
@@ -206,6 +209,7 @@
         <button type="submit" class="btn btn-solid">Connect</button>
       </div>
     </form>
+    </div>
   </div>
   <div class="modal-overlay" id="memoryModal">
     <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="modalTitle">

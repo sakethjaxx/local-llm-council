@@ -14,7 +14,7 @@ function renderSeats() {
         <div class="seat-dot" style="background: ${seat.color}; color: ${seat.color}"></div>
         <div class="seat-title">${escapeHtml(seat.icon)} ${escapeHtml(seat.label)}</div>
         <div class="seat-model ${ready ? '' : 'seat-model-missing'}" title="${escapeHtml(seat.model)}${ready ? '' : ' — not installed'}">${escapeHtml(seat.model.split('/').pop())}${ready ? '' : ' ⚠'}</div>
-        ${!isChairman ? `<div class="seat-remove" onclick="removeSeat('${id}')" title="Remove seat">✕</div>` : ''}
+        ${!isChairman ? `<button type="button" class="seat-remove" onclick="removeSeat('${id}')" title="Remove seat" aria-label="Remove ${escapeHtml(seat.label)} seat">✕</button>` : ''}
       </div>
       <div class="seat-edit-fields">
         <select class="seat-model-select" onchange="onSeatModelPicked('${id}', this)" aria-label="Model for ${escapeHtml(seat.label)}">

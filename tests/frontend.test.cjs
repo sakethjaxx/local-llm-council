@@ -28,6 +28,7 @@ test('cloud keys stay in memory and clearing removes them from requests', () => 
   assert.equal(app.evaluate('cloudKeyHeaders()["X-OpenAI-API-Key"]'), 'test-cloud-key');
   assert.equal(app.writes.length, 0);
   app.context.showToast = () => {};
+  app.context.confirm = () => true;
   app.evaluate('clearCloudKeys()');
   assert.equal(app.evaluate('cloudKeyHeaders()["X-OpenAI-API-Key"]'), undefined);
 });

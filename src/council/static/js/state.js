@@ -115,6 +115,9 @@ function renderMarkdown(text) {
 }
 
 function resetSession() {
+  const hasWork = activeCouncilAbortController || selectedFiles.length
+    || (document.getElementById('topicText')?.value || '').trim();
+  if (hasWork && !confirm('Reset the session? This stops a running council and clears the topic, files and results.')) return;
   stopActiveRun();
   clearStreamState();
   clearTimeout(projectScanTimer);
@@ -265,6 +268,7 @@ function hydrateCloudKeys() {
 }
 
 function clearCloudKeys() {
+  if (Object.keys(cloudKeys).length && !confirm('Clear the cloud API keys entered in this tab?')) return;
   cloudKeys = {};
   hydrateCloudKeys();
   showToast('Cloud API keys cleared.');
