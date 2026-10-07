@@ -8,6 +8,7 @@ Phase 3 │ Chairman Decision     — Synthesizes everything → final call
 
 import asyncio
 import contextlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -216,6 +217,16 @@ class CouncilOrchestrator:
                     yield evt
 
             chairman_result = parse_chairman_response(chairman_decision_text)
+            # Clients render the verdict from this event; send normalized JSON so a
+            # fenced or slightly malformed model reply still parses for them.
+            parsed = chairman_result["_parse_tier"] != "parse_failed"
+            yield {
+                "type": "member_done",
+                "member": "chairman",
+                "phase": 3,
+                "full_text": json.dumps(chairman_result) if parsed else chairman_decision_text,
+                "errored": "chairman" in errored_members,
+            }
             final_status, _ = await finalize_run(
                 run_id, chairman_result, chairman_decision_text, phase1_divergence, errored_members, combined_topic, chairman_cfg
             )

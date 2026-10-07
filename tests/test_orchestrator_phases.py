@@ -81,6 +81,35 @@ class OrchestratorPhasesTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_run_streams_member_results_and_a_parseable_verdict(self):
+        import json
+
+        async def fake_stream(self, member_id, cfg, phase, messages, queue, max_tokens, response_format=None, run_id=None):
+            text = ('```json\n{"verdict": "PROCEED", "risk_score": 3, "action_items": ["Add tests"]}\n```'
+                    if member_id == "chairman" else f"{member_id} analysis")
+            await queue.put({"type": "member_done", "member": member_id, "full_text": text})
+            return text
+
+        with patch("orchestrator.parse_input", side_effect=_return_text), \
+             patch("orchestrator.chunk_and_summarize", side_effect=_return_first_arg), \
+             patch("orchestrator.memory_engine.get_context", side_effect=_return_empty_context), \
+             patch("orchestrator.memory_engine.extract_memory", side_effect=_noop_async), \
+             patch("orchestrator.skill_registry.get_skills_for_topic", side_effect=_noop_async), \
+             patch("orchestrator.get_search_context", side_effect=_return_empty_search), \
+             patch.object(CouncilOrchestrator, "_stream_llm_to_queue", new=fake_stream):
+            events = [e async for e in CouncilOrchestrator().run("ship it", None, run_id="verdict-run")]
+
+        done = [e for e in events if e["type"] == "member_done"]
+        analyst_results = {e["member"]: e["full_text"] for e in done if e["full_text"].endswith("analysis")}
+        self.assertEqual(set(analyst_results), {"architect", "security", "perf"})
+        chairman = [e for e in done if e["member"] == "chairman"]
+        self.assertEqual(len(chairman), 1)
+        verdict = json.loads(chairman[0]["full_text"])  # clients JSON.parse this directly
+        self.assertEqual(verdict["verdict"], "PROCEED")
+        self.assertEqual(verdict["action_items"], ["Add tests"])
+        self.assertLess(events.index(chairman[0]), len(events) - 1)
+        self.assertEqual(events[-1]["type"], "done")
+
     async def test_run_deep_debate_uses_review_phase(self):
         orchestrator = CouncilOrchestrator()
         phases = []

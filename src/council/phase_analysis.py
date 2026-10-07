@@ -76,7 +76,6 @@ async def execute_phase1(
             analyses[event["member"]] = event["full_text"]
             if event.get("errored"):
                 errored_members.add(event["member"])
-        else:
-            yield event
+        yield event
 
     yield {"_internal_analyses": analyses}

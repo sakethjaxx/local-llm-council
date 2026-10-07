@@ -418,10 +418,8 @@ async def stream_chat_with_member(
 
     logger.info("chat_call_started", extra={"model": cfg.get("model"), "label": cfg.get("label"), "member_id": member_id})
     max_retries = 3
-    full_text = ""
     output_chars = 0
     active_litellm = _get_litellm()
-    active_store = _get_run_store()
 
     for attempt in range(max_retries):
         started_at = time.perf_counter()
@@ -443,7 +441,6 @@ async def stream_chat_with_member(
             async for chunk in resp:
                 text_chunk = chunk.choices[0].delta.content or ""
                 if text_chunk:
-                    full_text += text_chunk
                     output_chars += len(text_chunk)
                     yield text_chunk
             duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -452,7 +449,6 @@ async def stream_chat_with_member(
                 label=cfg.get("label"), attempt=attempt + 1, duration_ms=duration_ms,
                 success=True, output_chars=output_chars,
             )
-            await asyncio.to_thread(active_store.record_phase_output, run_id, 0, member_id, full_text, None, None, duration_ms)
             metrics_store.finish_run(run_id, status="completed")
             return
         except Exception as e:
