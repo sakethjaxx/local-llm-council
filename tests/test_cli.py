@@ -87,6 +87,42 @@ class CLITests(unittest.TestCase):
             asyncio.run(cli.main())
             mock_exit.assert_called_once_with(1)
 
+    @patch("cli.sys.argv", ["cli.py", "check_diff"])
+    @patch("cli.subprocess.run")
+    @patch("cli.get_hardware_suggestion")
+    @patch("cli.CouncilOrchestrator")
+    def test_cli_check_diff_static_backstop_overrides_model_approval(
+        self, mock_orch_class, mock_hardware_suggest, mock_run, *args
+    ):
+        # Model approves at a low risk score, but the diff adds a shell-injection
+        # pattern the static backstop must catch regardless (see _static_diff_findings).
+        mock_diff_result = MagicMock()
+        mock_diff_result.stdout = "+import os\n+os.system(user_input)\n"
+
+        mock_files_result = MagicMock()
+        mock_files_result.stdout = "app.py\n"
+
+        mock_run.side_effect = [mock_diff_result, mock_files_result]
+
+        mock_hardware_suggest.return_value = {
+            "config": {
+                "security": {"model": "ollama/qwen2.5:7b", "persona": "security analyst"},
+                "chairman": {"model": "ollama/qwen2.5:7b", "persona": "chairman"},
+            }
+        }
+
+        mock_orch = MagicMock()
+        mock_orch_class.return_value = mock_orch
+
+        async def mock_run_generator(*args, **kwargs):
+            yield {"type": "member_done", "member": "chairman", "full_text": '{"verdict": "APPROVE", "risk_score": 2, "action_items": []}'}
+
+        mock_orch.run = mock_run_generator
+
+        with patch("cli.sys.exit") as mock_exit:
+            asyncio.run(cli.main())
+            mock_exit.assert_called_once_with(1)
+
     @patch("cli.sys.argv", ["cli.py", "ask", "Should we migrate to SQLite WAL?"])
     @patch("cli.CouncilOrchestrator")
     def test_cli_ask_command(self, mock_orch_class):
@@ -233,6 +269,44 @@ class CLITests(unittest.TestCase):
         mock_exit.assert_called_once_with(1)
         mock_orch_class.assert_not_called()
         self.assertIn("ollama pull qwen2.5:3b", stderr.getvalue())
+
+
+class StaticDiffFindingsTests(unittest.TestCase):
+    def test_flags_os_system(self):
+        findings = cli._static_diff_findings("+os.system(cmd)\n")
+        self.assertEqual(len(findings), 1)
+        self.assertIn("os.system", findings[0])
+
+    def test_flags_subprocess_shell_true(self):
+        findings = cli._static_diff_findings("+subprocess.run(cmd, shell=True)\n")
+        self.assertTrue(any("shell=True" in f for f in findings))
+
+    def test_flags_eval_exec_pickle_yaml_dynamic_import(self):
+        diff = (
+            "+eval(x)\n"
+            "+exec(x)\n"
+            "+pickle.loads(data)\n"
+            "+yaml.load(data)\n"
+            "+__import__(name)\n"
+        )
+        findings = cli._static_diff_findings(diff)
+        self.assertEqual(len(findings), 5)
+
+    def test_yaml_safe_loader_not_flagged(self):
+        findings = cli._static_diff_findings("+yaml.load(data, Loader=yaml.SafeLoader)\n")
+        self.assertEqual(findings, [])
+
+    def test_ignores_removed_and_context_lines(self):
+        diff = (
+            "-os.system(cmd)\n"
+            " os.system(cmd)\n"
+            "+++ b/file.py\n"
+        )
+        self.assertEqual(cli._static_diff_findings(diff), [])
+
+    def test_clean_diff_has_no_findings(self):
+        findings = cli._static_diff_findings("+def add(a, b):\n+    return a + b\n")
+        self.assertEqual(findings, [])
 
 
 if __name__ == "__main__":

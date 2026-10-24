@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -109,6 +110,34 @@ def _require_models(config: dict) -> None:
         sys.exit(1)
 
 
+# Backstop for check_diff: a small reviewer model can misjudge severity (observed
+# calling an os.system() injection "SQL injection" and letting it through at risk 7).
+# These patterns force a block regardless of the model's verdict.
+_DANGEROUS_DIFF_PATTERNS = [
+    (re.compile(r"\bos\.system\s*\("), "os.system() call (shell injection risk)"),
+    (re.compile(r"\bsubprocess\.\w+\([^)]*shell\s*=\s*True"), "subprocess call with shell=True"),
+    (re.compile(r"\beval\s*\("), "eval() call"),
+    (re.compile(r"\bexec\s*\("), "exec() call"),
+    (re.compile(r"\bpickle\.loads?\s*\("), "pickle.load/loads() (unsafe deserialization)"),
+    (re.compile(r"\byaml\.load\s*\((?![^)]*Loader)"), "yaml.load() without an explicit safe Loader"),
+    (re.compile(r"__import__\s*\("), "dynamic __import__() call"),
+]
+
+
+def _static_diff_findings(diff: str) -> list[str]:
+    """Flag dangerous patterns in added lines. Line-level, not AST-aware — a
+    reviewer backstop, not a substitute for real static analysis."""
+    findings = []
+    for line in diff.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        added = line[1:]
+        for pattern, label in _DANGEROUS_DIFF_PATTERNS:
+            if pattern.search(added):
+                findings.append(f"{label}: {added.strip()}")
+    return findings
+
+
 async def _run_check_diff(model: str | None = None, preset: str | None = None):
     result = subprocess.run(["git", "diff", "--cached"], capture_output=True, text=True)
     diff = result.stdout
@@ -138,8 +167,15 @@ async def _run_check_diff(model: str | None = None, preset: str | None = None):
     _print_verdict(data)
     score = data.get("risk_score", 0)
     verdict = str(data.get("verdict", "")).upper()
+    static_findings = _static_diff_findings(diff)
 
-    if "REJECT" in verdict or "BLOCK" in verdict or (isinstance(score, (int, float)) and score >= 8):
+    model_blocked = "REJECT" in verdict or "BLOCK" in verdict or (isinstance(score, (int, float)) and score >= 8)
+    if static_findings:
+        _status("council: static check flagged risky patterns the model may have missed:")
+        for finding in static_findings:
+            _status(f"  - {finding}")
+
+    if model_blocked or static_findings:
         _status("council: commit blocked. Fix the items above, or bypass with `git commit --no-verify`.")
         sys.exit(1)
     else:
