@@ -125,16 +125,19 @@ _DANGEROUS_DIFF_PATTERNS = [
 
 
 def _static_diff_findings(diff: str) -> list[str]:
-    """Flag dangerous patterns in added lines. Line-level, not AST-aware — a
-    reviewer backstop, not a substitute for real static analysis."""
+    """Flag dangerous patterns in added lines, joined so a call wrapped across
+    several lines (subprocess.run(\\n cmd,\\n shell=True,\\n)) is still caught.
+    Pattern-based, not AST-aware — a reviewer backstop, not a substitute for
+    real static analysis."""
+    added_lines = [line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
+    blob = "\n".join(added_lines)
     findings = []
-    for line in diff.splitlines():
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
-        added = line[1:]
-        for pattern, label in _DANGEROUS_DIFF_PATTERNS:
-            if pattern.search(added):
-                findings.append(f"{label}: {added.strip()}")
+    for pattern, label in _DANGEROUS_DIFF_PATTERNS:
+        for match in pattern.finditer(blob):
+            snippet = " ".join(match.group(0).split())
+            if len(snippet) > 160:
+                snippet = snippet[:157] + "..."
+            findings.append(f"{label}: {snippet}")
     return findings
 
 

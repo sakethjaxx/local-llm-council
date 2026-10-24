@@ -281,6 +281,11 @@ class StaticDiffFindingsTests(unittest.TestCase):
         findings = cli._static_diff_findings("+subprocess.run(cmd, shell=True)\n")
         self.assertTrue(any("shell=True" in f for f in findings))
 
+    def test_flags_subprocess_shell_true_wrapped_across_lines(self):
+        diff = "+subprocess.run(\n+    cmd,\n+    shell=True,\n+)\n"
+        findings = cli._static_diff_findings(diff)
+        self.assertTrue(any("shell=True" in f for f in findings))
+
     def test_flags_eval_exec_pickle_yaml_dynamic_import(self):
         diff = (
             "+eval(x)\n"

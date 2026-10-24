@@ -116,7 +116,9 @@ Timings for live runs were inflated by other work on the same CPU-only machine; 
 
 1. Replace inline handlers with delegated listeners and drop `'unsafe-inline'` from `script-src`.
 2. Run the browser suite and the live Docker test in CI (a Linux runner also covers `RLIMIT_AS`), plus a nightly UAT with a tiny model.
-3. ~~Add deterministic checks to `check_diff`~~ — **done** (2026-10-24): `_static_diff_findings` in `cli.py` regex-scans added diff lines for `os.system`, `subprocess(...shell=True)`, `eval`/`exec`, unsafe `pickle`/`yaml.load`, and dynamic `__import__`, and force-blocks the commit regardless of the model's score. Line-level only, not AST-aware — a backstop, not a replacement for the model review.
+3. ~~Add deterministic checks to `check_diff`~~ — **done** (2026-10-24): `_static_diff_findings` in `cli.py` regex-scans added diff lines (joined across line-wraps, so a `subprocess.run(\n cmd,\n shell=True,\n)` split over several lines is still caught) for `os.system`, `subprocess(...shell=True)`, `eval`/`exec`, unsafe `pickle`/`yaml.load`, and dynamic `__import__`, and force-blocks the commit regardless of the model's score. Pattern-based, not AST-aware — a backstop, not a replacement for the model review.
 4. Push the local audit commits after review, confirm CI is green, and verify the Docker image build.
-5. Fuzz the upload, PDF and Markdown paths; get an external security review before any LAN deployment with sensitive data.
-6. Add run progress/ETA and cancel feedback for CPU-only users.
+5. CI (`.github/workflows/ci.yml`) runs lint/unit tests/audits but not the browser suite (`verify_ui.cjs`) or the live Docker test (`COUNCIL_TEST_DOCKER=1`) — add both (ubuntu-latest runners have Docker).
+6. CSP still allows `script-src 'unsafe-inline'` (~50 inline handlers in the UI); DOMPurify is the only XSS containment until these are delegated and the directive dropped.
+7. Fuzz the upload, PDF and Markdown paths; get an external security review before any LAN deployment with sensitive data.
+8. Add run progress/ETA and cancel feedback for CPU-only users.
